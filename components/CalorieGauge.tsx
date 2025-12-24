@@ -14,8 +14,7 @@ export const CalorieGauge: React.FC<CalorieGaugeProps> = ({
 }) => {
   const strokeWidth = 20;
   const radius = (size - strokeWidth) / 2;
-  const center = size / 2;
-
+  
   // Calculate percentage, capped at 100% for the main arc, but we can show overage differently
   const percentage = Math.min(1, Math.max(0, current / target));
   const isOverLimit = current > target;

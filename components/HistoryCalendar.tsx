@@ -73,8 +73,7 @@ export const HistoryCalendar: React.FC<HistoryCalendarProps> = ({ logs, onSelect
     // Render Grid
     const renderCalendarGrid = () => {
         const slots = [];
-        const totalSlots = 42; // 6 rows * 7 cols
-
+        
         // Empty slots for previous month
         for (let i = 0; i < firstDayOfMonth; i++) {
             slots.push(<div key={`empty-${i}`} className="h-10"></div>);

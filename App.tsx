@@ -17,12 +17,6 @@ const isSameDay = (d1: Date, d2: Date) => {
          d1.getDate() === d2.getDate();
 };
 
-const getStartOfDay = (d: Date) => {
-    const newDate = new Date(d);
-    newDate.setHours(0, 0, 0, 0);
-    return newDate;
-}
-
 const App: React.FC = () => {
   // --- State ---
   const [maintenanceCalories, setMaintenanceCalories] = useState<number>(2000);
@@ -87,7 +81,6 @@ const App: React.FC = () => {
   const handleNextDay = () => {
       const next = new Date(selectedDate);
       next.setDate(next.getDate() + 1);
-      const today = new Date();
       setSelectedDate(next);
   };
 
