@@ -1,0 +1,5 @@
+{
+  "name": "SmartCal",
+  "description": "An intelligent calorie tracker that uses AI to estimate calories and macros from natural language food descriptions.",
+  "requestFramePermissions": []
+}
