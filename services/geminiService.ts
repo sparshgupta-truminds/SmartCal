@@ -1,9 +1,6 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Macros } from "../types";
 
-// Declare process for Vite environment where it might not be strictly typed in client code
-declare const process: { env: { API_KEY: string } };
-
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const foodAnalysisSchema: Schema = {
