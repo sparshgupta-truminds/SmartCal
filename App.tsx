@@ -4,7 +4,6 @@ import { MacroChart } from './components/MacroChart';
 import { HistoryCalendar } from './components/HistoryCalendar';
 import { FoodDetailModal } from './components/FoodDetailModal';
 import { analyzeFoodInput, hasEnvApiKey } from './services/geminiService';
-import { exportToExcel } from './services/exportService';
 import { FoodItem, Macros, DailyStats, AppStatus } from './types';
 
 // Simple UUID generator
