@@ -1,7 +1,16 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Macros } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Move initialization inside the function to prevent top-level crashes
+// if process.env.API_KEY is missing or causes issues at startup.
+const getAiClient = () => {
+  // @ts-ignore
+  const apiKey = process.env.API_KEY; 
+  if (!apiKey) {
+    console.warn("API Key is missing. Gemini features will not work.");
+  }
+  return new GoogleGenAI({ apiKey: apiKey || "" });
+};
 
 const foodAnalysisSchema: Schema = {
   type: Type.OBJECT,
@@ -57,6 +66,7 @@ export const analyzeFoodInput = async (input: string): Promise<{
   smartInsights: string[];
 } | null> => {
   try {
+    const ai = getAiClient();
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: `Analyze the following food input: "${input}". 
