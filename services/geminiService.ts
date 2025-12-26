@@ -1,14 +1,49 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Macros } from "../types";
 
-// Move initialization inside the function to prevent top-level crashes
-// if process.env.API_KEY is missing or causes issues at startup.
-const getAiClient = () => {
-  // @ts-ignore
-  const apiKey = process.env.API_KEY; 
-  if (!apiKey || apiKey === "undefined") {
-    throw new Error("API Key is missing. Please add VITE_API_KEY to your environment variables.");
+// Helper to check if the environment has a key pre-configured
+// This prevents the app from crashing if no key is found immediately
+export const hasEnvApiKey = (): boolean => {
+    try {
+        getAiClient();
+        return true;
+    } catch (e) {
+        return false;
+    }
+};
+
+const getAiClient = (explicitKey?: string) => {
+  // Priority: 1. Key passed from UI, 2. Key from env vars
+  let apiKey = explicitKey;
+
+  if (!apiKey) {
+      // 1. Try process.env (injected via vite.config.ts define)
+      try {
+        // @ts-ignore
+        apiKey = process.env.API_KEY;
+      } catch (e) {}
+
+      // 2. Try import.meta.env (Vite native support for VITE_ prefixed vars)
+      if (!apiKey || apiKey === "undefined") {
+        try {
+          // @ts-ignore
+          apiKey = import.meta.env.VITE_API_KEY;
+        } catch (e) {}
+      }
+
+      // 3. Last ditch effort
+      if (!apiKey || apiKey === "undefined") {
+        try {
+          // @ts-ignore
+          apiKey = import.meta.env.API_KEY;
+        } catch (e) {}
+      }
   }
+
+  if (!apiKey || apiKey === "undefined") {
+    throw new Error("API Key is missing.");
+  }
+
   return new GoogleGenAI({ apiKey });
 };
 
@@ -56,7 +91,7 @@ const foodAnalysisSchema: Schema = {
   required: ["foodName", "calories", "protein", "carbs", "fat", "fiber", "sugar", "healthScore", "smartInsights"],
 };
 
-export const analyzeFoodInput = async (input: string): Promise<{
+export const analyzeFoodInput = async (input: string, userApiKey?: string): Promise<{
   name: string;
   calories: number;
   macros: Macros;
@@ -66,7 +101,7 @@ export const analyzeFoodInput = async (input: string): Promise<{
   smartInsights: string[];
 }> => {
   try {
-    const ai = getAiClient();
+    const ai = getAiClient(userApiKey);
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: `Analyze the following food input: "${input}". 

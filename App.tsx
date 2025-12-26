@@ -2,12 +2,12 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { CalorieGauge } from './components/CalorieGauge';
 import { MacroChart } from './components/MacroChart';
 import { HistoryCalendar } from './components/HistoryCalendar';
-import { FoodDetailModal } from './components/FoodDetailModal'; // Import new modal
-import { analyzeFoodInput } from './services/geminiService';
+import { FoodDetailModal } from './components/FoodDetailModal';
+import { analyzeFoodInput, hasEnvApiKey } from './services/geminiService';
 import { exportToExcel } from './services/exportService';
 import { FoodItem, Macros, DailyStats, AppStatus } from './types';
 
-// Simple UUID generator since we can't install packages easily in this prompt context
+// Simple UUID generator
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 // Date Helpers
@@ -26,6 +26,11 @@ const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   
+  // API Key Management
+  const [userApiKey, setUserApiKey] = useState('');
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState('');
+
   // Settings/Modal States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -54,6 +59,17 @@ const App: React.FC = () => {
     }
 
     setTempGoal(savedGoal || '2000');
+
+    // Check for API Key
+    const storedKey = localStorage.getItem('smartcal_api_key');
+    if (storedKey) {
+        setUserApiKey(storedKey);
+    } else {
+        // If no stored key, and no env key, show modal
+        if (!hasEnvApiKey()) {
+            setShowApiKeyModal(true);
+        }
+    }
   }, []);
 
   useEffect(() => {
@@ -131,9 +147,9 @@ const App: React.FC = () => {
     setShowSuccessToast(false);
     
     try {
-      const analysis = await analyzeFoodInput(inputText);
+      // Pass the userApiKey if it exists
+      const analysis = await analyzeFoodInput(inputText, userApiKey);
       
-      // Check if it's an "Unknown Item" which we treat as a soft error or handle gracefully
       if (analysis.name === "Unknown Item") {
          setErrorMessage("Could not identify this food. Please try a different description.");
          setStatus(AppStatus.ERROR);
@@ -142,11 +158,7 @@ const App: React.FC = () => {
 
       const timestampDate = new Date(selectedDate);
       const now = new Date();
-      if (isSameDay(selectedDate, now)) {
-          timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
-      } else {
-          timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
-      }
+      timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
 
       const newId = generateId();
       const newItem: FoodItem = {
@@ -156,7 +168,6 @@ const App: React.FC = () => {
         calories: analysis.calories,
         macros: analysis.macros,
         timestamp: timestampDate.getTime(),
-        // New fields
         fiber: analysis.fiber,
         sugar: analysis.sugar,
         healthScore: analysis.healthScore,
@@ -174,17 +185,22 @@ const App: React.FC = () => {
       console.error("Analysis failed", error);
       setErrorMessage(error.message || "Could not analyze food. Please check your API key.");
       setStatus(AppStatus.ERROR);
+      
+      // If unauthorized or key issue, maybe prompt again?
+      if (error.message?.includes('API Key') || error.message?.includes('403')) {
+          // Optional: You could auto-open the modal here
+      }
     }
-  }, [inputText, selectedDate]);
+  }, [inputText, selectedDate, userApiKey]);
 
   const handleDeleteLog = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation(); // Prevent opening detail modal
+    e.stopPropagation(); 
     setLogs(prev => prev.filter(item => item.id !== id));
     if (selectedFoodDetail?.id === id) setSelectedFoodDetail(null);
   };
 
   const handleEditClick = (e: React.MouseEvent, item: FoodItem) => {
-    e.stopPropagation(); // Prevent opening detail modal
+    e.stopPropagation(); 
     setEditingLog(item);
   }
 
@@ -194,6 +210,13 @@ const App: React.FC = () => {
       setMaintenanceCalories(val);
       setIsSettingsOpen(false);
     }
+  };
+
+  const handleSaveApiKey = () => {
+      if (!tempApiKey.trim()) return;
+      setUserApiKey(tempApiKey.trim());
+      localStorage.setItem('smartcal_api_key', tempApiKey.trim());
+      setShowApiKeyModal(false);
   };
 
   const handleSaveEditedLog = () => {
@@ -239,6 +262,15 @@ const App: React.FC = () => {
           
           <div className="flex items-center gap-2">
             <button
+                onClick={() => setShowApiKeyModal(true)}
+                className={`transition-colors p-2 rounded-full hover:bg-slate-800 ${userApiKey ? 'text-slate-400 hover:text-emerald-400' : 'text-red-400 hover:text-red-300 animate-pulse'}`}
+                title="API Key Settings"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 000-2z" clipRule="evenodd" />
+                </svg>
+            </button>
+            <button
                 onClick={() => setIsCalendarOpen(true)}
                 className="text-slate-400 hover:text-cyan-400 transition-colors p-2 rounded-full hover:bg-slate-800"
                 title="View History"
@@ -248,15 +280,6 @@ const App: React.FC = () => {
                 </svg>
             </button>
 
-            <button
-                onClick={() => exportToExcel(logs)}
-                className="text-slate-400 hover:text-emerald-400 transition-colors p-2 rounded-full hover:bg-slate-800"
-                title="Download Excel File"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-            </button>
             <button 
                 onClick={() => setIsSettingsOpen(true)}
                 className="text-xs font-medium bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-full transition-colors flex items-center gap-1 border border-slate-700"
@@ -275,7 +298,6 @@ const App: React.FC = () => {
              <button 
                 onClick={handlePrevDay}
                 className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
-                aria-label="Previous Day"
              >
                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                    <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
@@ -291,7 +313,6 @@ const App: React.FC = () => {
                 onClick={handleNextDay}
                 className={`p-2 rounded-full transition-colors ${isToday ? 'opacity-30 cursor-not-allowed text-slate-600' : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'}`}
                 disabled={isToday}
-                aria-label="Next Day"
              >
                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
@@ -413,7 +434,6 @@ const App: React.FC = () => {
                                     <button 
                                         onClick={(e) => handleEditClick(e, item)}
                                         className="text-slate-600 hover:text-cyan-400 transition-colors p-1.5 rounded-lg hover:bg-slate-700"
-                                        aria-label="Edit log"
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                                             <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
@@ -422,7 +442,6 @@ const App: React.FC = () => {
                                     <button 
                                         onClick={(e) => handleDeleteLog(e, item.id)}
                                         className="text-slate-600 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-slate-700"
-                                        aria-label="Delete log"
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                                             <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -448,6 +467,55 @@ const App: React.FC = () => {
             </div>
         )}
       </main>
+
+      {/* API Key Modal */}
+      {showApiKeyModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+              <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+                  <div className="flex flex-col items-center text-center mb-6">
+                      <div className="w-12 h-12 bg-emerald-500/10 rounded-full flex items-center justify-center mb-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8v0z" />
+                        </svg>
+                      </div>
+                      <h3 className="text-xl font-bold mb-2">Enter Gemini API Key</h3>
+                      <p className="text-slate-400 text-sm">
+                          To analyze your food, this app needs a Gemini API Key from Google AI Studio.
+                      </p>
+                  </div>
+                  
+                  <div className="mb-6">
+                      <label className="block text-xs font-medium text-slate-500 uppercase mb-2">API Key</label>
+                      <input 
+                          type="password" 
+                          value={tempApiKey}
+                          onChange={(e) => setTempApiKey(e.target.value)}
+                          placeholder="AIzaSy..."
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                      />
+                      <div className="mt-2 text-center">
+                          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-xs text-emerald-500 hover:text-emerald-400 underline">
+                              Get a free key here
+                          </a>
+                      </div>
+                  </div>
+                  
+                  <button 
+                      onClick={handleSaveApiKey}
+                      disabled={!tempApiKey.trim()}
+                      className="w-full px-4 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-900 font-bold transition-colors"
+                  >
+                      Save Key
+                  </button>
+                  <button 
+                      onClick={() => setShowApiKeyModal(false)}
+                      className="w-full mt-3 px-4 py-2 text-sm text-slate-500 hover:text-slate-400"
+                  >
+                      Cancel
+                  </button>
+              </div>
+          </div>
+      )}
 
       {/* Settings Modal */}
       {isSettingsOpen && (
