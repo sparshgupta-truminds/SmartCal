@@ -23,6 +23,7 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<FoodItem[]>([]);
   const [inputText, setInputText] = useState('');
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
+  const [errorMessage, setErrorMessage] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   
   // Settings/Modal States
@@ -126,11 +127,19 @@ const App: React.FC = () => {
     if (!inputText.trim()) return;
 
     setStatus(AppStatus.ANALYZING);
+    setErrorMessage('');
     setShowSuccessToast(false);
     
-    const analysis = await analyzeFoodInput(inputText);
-    
-    if (analysis) {
+    try {
+      const analysis = await analyzeFoodInput(inputText);
+      
+      // Check if it's an "Unknown Item" which we treat as a soft error or handle gracefully
+      if (analysis.name === "Unknown Item") {
+         setErrorMessage("Could not identify this food. Please try a different description.");
+         setStatus(AppStatus.ERROR);
+         return;
+      }
+
       const timestampDate = new Date(selectedDate);
       const now = new Date();
       if (isSameDay(selectedDate, now)) {
@@ -160,7 +169,10 @@ const App: React.FC = () => {
       setShowSuccessToast(true);
       setInputText('');
       setTimeout(() => setStatus(AppStatus.IDLE), 2000);
-    } else {
+      
+    } catch (error: any) {
+      console.error("Analysis failed", error);
+      setErrorMessage(error.message || "Could not analyze food. Please check your API key.");
       setStatus(AppStatus.ERROR);
     }
   }, [inputText, selectedDate]);
@@ -359,7 +371,9 @@ const App: React.FC = () => {
                 </button>
             </div>
             {status === AppStatus.ERROR && (
-                <p className="text-red-400 text-xs mt-2 ml-1">Could not analyze food. Please try again.</p>
+                <p className="text-red-400 text-xs mt-2 ml-1 animate-fade-in-up">
+                  {errorMessage || "Could not analyze food. Please try again."}
+                </p>
             )}
           </div>
         </section>

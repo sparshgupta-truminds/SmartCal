@@ -6,10 +6,10 @@ import { Macros } from "../types";
 const getAiClient = () => {
   // @ts-ignore
   const apiKey = process.env.API_KEY; 
-  if (!apiKey) {
-    console.warn("API Key is missing. Gemini features will not work.");
+  if (!apiKey || apiKey === "undefined") {
+    throw new Error("API Key is missing. Please add VITE_API_KEY to your environment variables.");
   }
-  return new GoogleGenAI({ apiKey: apiKey || "" });
+  return new GoogleGenAI({ apiKey });
 };
 
 const foodAnalysisSchema: Schema = {
@@ -64,7 +64,7 @@ export const analyzeFoodInput = async (input: string): Promise<{
   sugar: number;
   healthScore: number;
   smartInsights: string[];
-} | null> => {
+}> => {
   try {
     const ai = getAiClient();
     const response = await ai.models.generateContent({
@@ -72,16 +72,28 @@ export const analyzeFoodInput = async (input: string): Promise<{
       contents: `Analyze the following food input: "${input}". 
       Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
       Be realistic with portion sizes if not specified.
-      If the input is not a food item, return a JSON with 0 calories and 'Unknown Item'.`,
+      
+      IMPORTANT: If the input is not a food item or cannot be analyzed, you MUST return a valid JSON object matching the schema with:
+      - foodName: "Unknown Item"
+      - calories: 0
+      - protein: 0
+      - carbs: 0
+      - fat: 0
+      - fiber: 0
+      - sugar: 0
+      - healthScore: 0
+      - smartInsights: ["Could not identify food", "Please try a different description"]
+      
+      Do not return markdown code blocks, just the JSON.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: foodAnalysisSchema,
-        systemInstruction: "You are a professional nutritionist API. Your goal is to accurately estimate nutrition from natural language text."
+        systemInstruction: "You are a professional nutritionist API. Your goal is to accurately estimate nutrition from natural language text. You always respond with valid JSON matching the schema."
       },
     });
 
     const text = response.text;
-    if (!text) return null;
+    if (!text) throw new Error("No response from AI");
 
     const data = JSON.parse(text);
 
@@ -98,8 +110,10 @@ export const analyzeFoodInput = async (input: string): Promise<{
       healthScore: data.healthScore || 5,
       smartInsights: data.smartInsights || ["Enjoy your meal!"],
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
-    return null;
+    // Extract meaningful error message
+    const msg = error.message || "Failed to analyze food";
+    throw new Error(msg);
   }
 };
