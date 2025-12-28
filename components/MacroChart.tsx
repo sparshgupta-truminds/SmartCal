@@ -48,7 +48,7 @@ export const MacroChart: React.FC<MacroChartProps> = ({ macros }) => {
           />
         </PieChart>
       </ResponsiveContainer>
-      <div className="flex justify-center gap-4 text-xs font-medium mt-2">
+      <div className="flex justify-center gap-4 text-xs font-medium mt-2 pb-2">
         <div className="flex items-center gap-1">
             <div className="w-2 h-2 rounded-full bg-blue-500"></div>
             <span className="text-slate-300">{macros.protein}g Prot</span>

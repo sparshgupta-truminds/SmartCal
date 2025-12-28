@@ -20,6 +20,7 @@ const App: React.FC = () => {
   // --- State ---
   const [maintenanceCalories, setMaintenanceCalories] = useState<number>(2000);
   const [logs, setLogs] = useState<FoodItem[]>([]);
+  const [favorites, setFavorites] = useState<FoodItem[]>([]); // Favorites State
   const [inputText, setInputText] = useState('');
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -33,11 +34,13 @@ const App: React.FC = () => {
   // Settings/Modal States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
   const [tempGoal, setTempGoal] = useState<string>('2000');
   
   // Modal Management
   const [editingLog, setEditingLog] = useState<FoodItem | null>(null);
   const [selectedFoodDetail, setSelectedFoodDetail] = useState<FoodItem | null>(null);
+  const [isModalAnalyzing, setIsModalAnalyzing] = useState(false);
 
   // Visual Feedback State
   const [lastAddedId, setLastAddedId] = useState<string | null>(null);
@@ -54,6 +57,15 @@ const App: React.FC = () => {
             setLogs(JSON.parse(savedLogs));
         } catch (e) {
             console.error("Failed to parse logs", e);
+        }
+    }
+
+    const savedFavs = localStorage.getItem('smartcal_favorites');
+    if (savedFavs) {
+        try {
+            setFavorites(JSON.parse(savedFavs));
+        } catch (e) {
+            console.error("Failed to parse favorites", e);
         }
     }
 
@@ -78,6 +90,10 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('smartcal_logs', JSON.stringify(logs));
   }, [logs]);
+
+  useEffect(() => {
+    localStorage.setItem('smartcal_favorites', JSON.stringify(favorites));
+  }, [favorites]);
 
   // Clear toast after a few seconds
   useEffect(() => {
@@ -192,6 +208,59 @@ const App: React.FC = () => {
     }
   }, [inputText, selectedDate, userApiKey]);
 
+  const handleManualAddClick = () => {
+    // Open the edit modal with a blank template
+    setEditingLog({
+      id: 'NEW_ENTRY', // Marker ID
+      name: '',
+      quantityStr: '1 serving',
+      calories: 0,
+      macros: {
+        protein: 0,
+        carbs: 0,
+        fat: 0
+      },
+      timestamp: Date.now(),
+      healthScore: 5,
+      smartInsights: ["Manually added item"]
+    });
+  };
+
+  const handleCreateFavoriteClick = () => {
+    // We will use the editingLog modal on top.
+    setEditingLog({
+      id: 'NEW_FAVORITE',
+      name: '',
+      quantityStr: '1 serving',
+      calories: 0,
+      macros: { protein: 0, carbs: 0, fat: 0 },
+      timestamp: Date.now(),
+      healthScore: 5,
+      smartInsights: ["Quick add item"] // Default, but auto-fill will overwrite
+    });
+  };
+
+  const handleQuickLog = (fav: FoodItem) => {
+    const timestampDate = new Date(selectedDate);
+    const now = new Date();
+    timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+
+    const newLog: FoodItem = {
+        ...fav,
+        id: generateId(),
+        timestamp: timestampDate.getTime()
+    };
+
+    setLogs(prev => [newLog, ...prev]);
+    setLastAddedId(newLog.id);
+    setShowSuccessToast(true);
+    setIsFavoritesOpen(false); // Close modal on selection
+  };
+
+  const handleDeleteFavorite = (id: string) => {
+      setFavorites(prev => prev.filter(f => f.id !== id));
+  };
+
   const handleDeleteLog = (e: React.MouseEvent, id: string) => {
     e.stopPropagation(); 
     setLogs(prev => prev.filter(item => item.id !== id));
@@ -218,28 +287,87 @@ const App: React.FC = () => {
       setShowApiKeyModal(false);
   };
 
-  const handleSaveEditedLog = () => {
-    if (editingLog) {
-      setLogs(prev => prev.map(item => item.id === editingLog.id ? editingLog : item));
-      setEditingLog(null);
+  const handleAutoFill = async () => {
+    if (!editingLog || !editingLog.name) return;
+    setIsModalAnalyzing(true);
+    try {
+        const analysis = await analyzeFoodInput(editingLog.name, userApiKey);
+        if (analysis.name !== "Unknown Item") {
+            setEditingLog(prev => prev ? ({
+                ...prev,
+                name: analysis.name, // optionally update name to normalized name
+                calories: analysis.calories,
+                macros: analysis.macros,
+                smartInsights: analysis.smartInsights, // Populates insights from API
+                healthScore: analysis.healthScore,
+                sugar: analysis.sugar,
+                fiber: analysis.fiber
+            }) : null);
+        } else {
+             // Optional: visual shake or error inside modal
+             alert("Could not identify food. Please try a clearer description.");
+        }
+    } catch(e) {
+        alert("Analysis failed. Check connection/API key.");
+    } finally {
+        setIsModalAnalyzing(false);
     }
+  };
+
+  const handleSaveEditedLog = () => {
+    if (!editingLog) return;
+
+    if (editingLog.id === 'NEW_ENTRY') {
+      // Logic for adding a NEW manual item
+      const timestampDate = new Date(selectedDate);
+      const now = new Date();
+      timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+
+      const newItem: FoodItem = {
+        ...editingLog,
+        id: generateId(),
+        timestamp: timestampDate.getTime(),
+        name: editingLog.name || 'Custom Food', // Ensure name isn't empty
+      };
+      
+      setLogs(prev => [newItem, ...prev]);
+      setLastAddedId(newItem.id);
+      setShowSuccessToast(true);
+    } else if (editingLog.id === 'NEW_FAVORITE') {
+        // Logic for creating a FAVORITE
+        const newFav: FoodItem = {
+            ...editingLog,
+            id: generateId(),
+            name: editingLog.name || 'Custom Favorite'
+        };
+        setFavorites(prev => [...prev, newFav]);
+        // Keep favorites modal open?
+    } else {
+      // Logic for updating EXISTING item
+      setLogs(prev => prev.map(item => item.id === editingLog.id ? editingLog : item));
+    }
+    
+    setEditingLog(null);
   };
 
   const updateEditingLogField = (field: keyof FoodItem | keyof Macros, value: string | number) => {
     if (!editingLog) return;
     
+    // Allow empty string for temporary editing state, but store numbers as numbers
+    const numValue = value === '' ? 0 : Number(value);
+
     if (field === 'protein' || field === 'carbs' || field === 'fat') {
        setEditingLog({
          ...editingLog,
          macros: {
            ...editingLog.macros,
-           [field]: Number(value)
+           [field]: numValue
          }
        });
     } else {
       setEditingLog({
         ...editingLog,
-        [field]: field === 'name' || field === 'quantityStr' ? value : Number(value)
+        [field]: field === 'name' || field === 'quantityStr' ? value : numValue
       });
     }
   };
@@ -339,7 +467,7 @@ const App: React.FC = () => {
                <p className="text-sm text-slate-300 italic">"{motivationalMessage}"</p>
              </div>
              
-             <div className="border-t border-slate-700/50 pt-6">
+             <div className="border-t border-slate-700/50 pt-6 pb-4">
                  <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider text-center mb-4">Daily Macro Split</h3>
                  <MacroChart macros={{
                      protein: dailyStats.totalProtein,
@@ -352,50 +480,74 @@ const App: React.FC = () => {
 
         {/* Input Area */}
         <section className="px-4 mb-6 sticky top-[73px] z-40 mt-6">
-          <div className="relative group">
-            <div className={`absolute -inset-0.5 bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-xl opacity-20 group-hover:opacity-40 transition duration-500 blur ${status === AppStatus.ANALYZING ? 'animate-pulse opacity-75' : ''}`}></div>
-            <div className={`relative bg-slate-900 rounded-xl p-1 flex gap-2 border border-slate-700 shadow-lg ${status === AppStatus.SUCCESS ? 'animate-success-pulse' : ''}`}>
-                <input 
-                    type="text"
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddFood()}
-                    placeholder={isToday ? "e.g., '2 eggs and avocado toast'" : `Add food to ${displayDate}...`}
-                    className="flex-1 bg-transparent border-none outline-none text-slate-100 placeholder-slate-500 px-4 py-3"
-                    disabled={status === AppStatus.ANALYZING}
-                />
-                <button 
-                    onClick={handleAddFood}
-                    disabled={status === AppStatus.ANALYZING || !inputText.trim()}
-                    className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center justify-center min-w-[60px]
-                        ${status === AppStatus.ANALYZING 
-                            ? 'bg-slate-800 text-slate-400 cursor-wait' 
-                            : status === AppStatus.SUCCESS
-                                ? 'bg-emerald-500 text-slate-950'
-                                : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-[0_0_15px_rgba(16,185,129,0.4)]'}`}
-                >
-                    {status === AppStatus.ANALYZING ? (
-                         <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                         </svg>
-                    ) : status === AppStatus.SUCCESS ? (
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 animate-slide-in" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                    ) : (
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
-                        </svg>
-                    )}
-                </button>
+          <div className="flex gap-2">
+            <div className="relative group flex-1">
+                <div className={`absolute -inset-0.5 bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-xl opacity-20 group-hover:opacity-40 transition duration-500 blur ${status === AppStatus.ANALYZING ? 'animate-pulse opacity-75' : ''}`}></div>
+                <div className={`relative bg-slate-900 rounded-xl p-1 flex gap-2 border border-slate-700 shadow-lg ${status === AppStatus.SUCCESS ? 'animate-success-pulse' : ''}`}>
+                    <input 
+                        type="text"
+                        value={inputText}
+                        onChange={(e) => setInputText(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleAddFood()}
+                        placeholder={isToday ? "e.g., '2 eggs and toast'" : `Add food to ${displayDate}...`}
+                        className="flex-1 bg-transparent border-none outline-none text-slate-100 placeholder-slate-500 px-4 py-3 min-w-0"
+                        disabled={status === AppStatus.ANALYZING}
+                    />
+                    <button 
+                        onClick={handleAddFood}
+                        disabled={status === AppStatus.ANALYZING || !inputText.trim()}
+                        className={`px-3 py-2 rounded-lg font-medium transition-all flex items-center justify-center min-w-[50px]
+                            ${status === AppStatus.ANALYZING 
+                                ? 'bg-slate-800 text-slate-400 cursor-wait' 
+                                : status === AppStatus.SUCCESS
+                                    ? 'bg-emerald-500 text-slate-950'
+                                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-[0_0_15px_rgba(16,185,129,0.4)]'}`}
+                    >
+                        {status === AppStatus.ANALYZING ? (
+                            <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        ) : status === AppStatus.SUCCESS ? (
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 animate-slide-in" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                        ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+                            </svg>
+                        )}
+                    </button>
+                </div>
             </div>
-            {status === AppStatus.ERROR && (
+            
+            {/* Manual Entry Button */}
+            <button
+                onClick={handleManualAddClick}
+                className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white rounded-xl px-3 flex items-center justify-center transition-all shadow-lg"
+                title="Add Manually"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+            </button>
+             {/* Favorites Button */}
+             <button
+                onClick={() => setIsFavoritesOpen(true)}
+                className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-yellow-400 rounded-xl px-3 flex items-center justify-center transition-all shadow-lg"
+                title="Favorites / Quick Add"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                </svg>
+            </button>
+          </div>
+          
+          {status === AppStatus.ERROR && (
                 <p className="text-red-400 text-xs mt-2 ml-1 animate-fade-in-up">
                   {errorMessage || "Could not analyze food. Please try again."}
                 </p>
-            )}
-          </div>
+          )}
         </section>
 
         {/* Food Log List */}
@@ -461,7 +613,7 @@ const App: React.FC = () => {
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                     </svg>
-                    <span>Food Added Successfully!</span>
+                    <span>{lastAddedId === 'NEW' ? 'Food Logged Successfully!' : 'Food Added Successfully!'}</span>
                 </div>
             </div>
         )}
@@ -563,6 +715,63 @@ const App: React.FC = () => {
            />
        )}
 
+      {/* Favorites List Modal */}
+      {isFavoritesOpen && (
+           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in-up">
+              <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl flex flex-col max-h-[85vh]">
+                  <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                             <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                          </svg>
+                          Quick Add
+                      </h3>
+                      <button onClick={() => setIsFavoritesOpen(false)} className="p-1 hover:bg-slate-800 rounded-full text-slate-400">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                      </button>
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto pr-1 space-y-3 mb-4">
+                      {favorites.length === 0 ? (
+                          <div className="text-center py-8 text-slate-500">
+                              <p className="text-sm">No favorites added yet.</p>
+                              <p className="text-xs mt-1">Create shortcuts for foods you eat often.</p>
+                          </div>
+                      ) : (
+                          favorites.map(fav => (
+                              <div key={fav.id} className="group flex items-center bg-slate-800 p-3 rounded-xl border border-slate-700/50 hover:border-emerald-500/30 transition-all cursor-pointer" onClick={() => handleQuickLog(fav)}>
+                                  <div className="flex-1">
+                                      <p className="font-bold text-slate-200">{fav.name}</p>
+                                      <p className="text-xs text-slate-500">{fav.calories} kcal • {fav.macros.protein}p {fav.macros.carbs}c {fav.macros.fat}f</p>
+                                  </div>
+                                  <button 
+                                      onClick={(e) => { e.stopPropagation(); handleDeleteFavorite(fav.id); }}
+                                      className="p-2 text-slate-600 hover:text-red-400 hover:bg-slate-900 rounded-lg transition-colors"
+                                  >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                                      </svg>
+                                  </button>
+                              </div>
+                          ))
+                      )}
+                  </div>
+
+                  <button 
+                      onClick={handleCreateFavoriteClick}
+                      className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border-2 border-dashed border-slate-600 hover:border-emerald-500 text-slate-400 hover:text-white transition-all font-medium flex items-center justify-center gap-2"
+                  >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                         <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+                      </svg>
+                      Add New Favorite
+                  </button>
+              </div>
+           </div>
+      )}
+
        {/* Food Detail Modal */}
        {selectedFoodDetail && (
            <FoodDetailModal 
@@ -575,18 +784,48 @@ const App: React.FC = () => {
       {editingLog && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
               <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
-                  <h3 className="text-xl font-bold mb-1">Edit Food Details</h3>
-                  <p className="text-slate-400 text-sm mb-6">Update nutrition information manually.</p>
+                  <h3 className="text-xl font-bold mb-1">
+                    {editingLog.id === 'NEW_ENTRY' ? 'Add Custom Food' : 
+                     editingLog.id === 'NEW_FAVORITE' ? 'Add Common Food' : 'Edit Food Details'}
+                  </h3>
+                  <p className="text-slate-400 text-sm mb-6">
+                    {editingLog.id === 'NEW_ENTRY' ? 'Enter info manually or use Auto-Fill.' : 
+                     editingLog.id === 'NEW_FAVORITE' ? 'Create a shortcut. Type a name and Auto-Fill.' :
+                     'Update nutrition information manually.'}
+                  </p>
                   
                   <div className="space-y-4 mb-8">
                       <div>
-                          <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Food Name</label>
-                          <input 
-                            type="text" 
-                            value={editingLog.name}
-                            onChange={(e) => updateEditingLogField('name', e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                          />
+                          <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Food Description</label>
+                          <div className="flex gap-2">
+                            <input 
+                                type="text" 
+                                value={editingLog.name}
+                                onChange={(e) => updateEditingLogField('name', e.target.value)}
+                                placeholder="e.g. 200g Chicken Breast"
+                                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600"
+                            />
+                            {/* Auto-Fill Button for New Items */}
+                            {(editingLog.id === 'NEW_ENTRY' || editingLog.id === 'NEW_FAVORITE') && (
+                                <button 
+                                    onClick={handleAutoFill}
+                                    disabled={!editingLog.name || isModalAnalyzing}
+                                    className="px-3 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 rounded-lg border border-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                    title="Auto-Fill Macros from Description"
+                                >
+                                    {isModalAnalyzing ? (
+                                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                    ) : (
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                                        </svg>
+                                    )}
+                                </button>
+                            )}
+                          </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
@@ -596,7 +835,8 @@ const App: React.FC = () => {
                               type="number" 
                               value={editingLog.calories}
                               onChange={(e) => updateEditingLogField('calories', e.target.value)}
-                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                              placeholder="0"
+                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600"
                             />
                         </div>
                         <div>
@@ -605,7 +845,8 @@ const App: React.FC = () => {
                                type="number" 
                                value={editingLog.macros.protein}
                                onChange={(e) => updateEditingLogField('protein', e.target.value)}
-                               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="0"
+                               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-600"
                              />
                         </div>
                       </div>
@@ -617,7 +858,8 @@ const App: React.FC = () => {
                               type="number" 
                               value={editingLog.macros.carbs}
                               onChange={(e) => updateEditingLogField('carbs', e.target.value)}
-                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                              placeholder="0"
+                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600"
                             />
                         </div>
                         <div>
@@ -626,7 +868,8 @@ const App: React.FC = () => {
                                type="number" 
                                value={editingLog.macros.fat}
                                onChange={(e) => updateEditingLogField('fat', e.target.value)}
-                               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                               placeholder="0"
+                               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-slate-600"
                              />
                         </div>
                       </div>
@@ -641,9 +884,11 @@ const App: React.FC = () => {
                       </button>
                       <button 
                         onClick={handleSaveEditedLog}
-                        className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold transition-colors"
+                        disabled={!editingLog.name || isModalAnalyzing}
+                        className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-900 font-bold transition-colors"
                       >
-                          Save Changes
+                          {editingLog.id === 'NEW_ENTRY' ? 'Add Item' : 
+                           editingLog.id === 'NEW_FAVORITE' ? 'Save Favorite' : 'Save Changes'}
                       </button>
                   </div>
               </div>
