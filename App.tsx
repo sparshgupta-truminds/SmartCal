@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { CalorieGauge } from './components/CalorieGauge';
 import { MacroChart } from './components/MacroChart';
 import { HistoryCalendar } from './components/HistoryCalendar';
@@ -35,6 +35,7 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [tempGoal, setTempGoal] = useState<string>('2000');
   
   // Modal Management
@@ -45,6 +46,7 @@ const App: React.FC = () => {
   // Visual Feedback State
   const [lastAddedId, setLastAddedId] = useState<string | null>(null);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // --- Effects (Persistence) ---
   useEffect(() => {
@@ -94,6 +96,17 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('smartcal_favorites', JSON.stringify(favorites));
   }, [favorites]);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+        if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+            setIsMenuOpen(false);
+        }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Clear toast after a few seconds
   useEffect(() => {
@@ -200,11 +213,6 @@ const App: React.FC = () => {
       console.error("Analysis failed", error);
       setErrorMessage(error.message || "Could not analyze food. Please check your API key.");
       setStatus(AppStatus.ERROR);
-      
-      // If unauthorized or key issue, maybe prompt again?
-      if (error.message?.includes('API Key') || error.message?.includes('403')) {
-          // Optional: You could auto-open the modal here
-      }
     }
   }, [inputText, selectedDate, userApiKey]);
 
@@ -227,7 +235,6 @@ const App: React.FC = () => {
   };
 
   const handleCreateFavoriteClick = () => {
-    // We will use the editingLog modal on top.
     setEditingLog({
       id: 'NEW_FAVORITE',
       name: '',
@@ -377,7 +384,7 @@ const App: React.FC = () => {
       
       {/* Header */}
       <header className="sticky top-0 z-50 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
-        <div className="max-w-md mx-auto px-4 py-4 flex justify-between items-center">
+        <div className="max-w-md mx-auto px-4 py-4 flex justify-between items-center relative">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-gradient-to-tr from-emerald-400 to-cyan-500 rounded-lg flex items-center justify-center">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-900" viewBox="0 0 20 20" fill="currentColor">
@@ -387,32 +394,58 @@ const App: React.FC = () => {
             <h1 className="font-bold text-lg tracking-tight">SmartCal</h1>
           </div>
           
-          <div className="flex items-center gap-2">
-            <button
-                onClick={() => setShowApiKeyModal(true)}
-                className={`transition-colors p-2 rounded-full hover:bg-slate-800 ${userApiKey ? 'text-slate-400 hover:text-emerald-400' : 'text-red-400 hover:text-red-300 animate-pulse'}`}
-                title="API Key Settings"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 000-2z" clipRule="evenodd" />
-                </svg>
-            </button>
-            <button
-                onClick={() => setIsCalendarOpen(true)}
-                className="text-slate-400 hover:text-cyan-400 transition-colors p-2 rounded-full hover:bg-slate-800"
-                title="View History"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
-                </svg>
-            </button>
-
-            <button 
+          <div className="flex items-center gap-3">
+             <button 
                 onClick={() => setIsSettingsOpen(true)}
                 className="text-xs font-medium bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-full transition-colors flex items-center gap-1 border border-slate-700"
             >
                 Goal: {maintenanceCalories}
             </button>
+            
+            <div className="relative" ref={menuRef}>
+                <button
+                    onClick={() => setIsMenuOpen(!isMenuOpen)}
+                    className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+                    title="Menu"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                </button>
+
+                {isMenuOpen && (
+                    <div className="absolute top-full right-0 mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-xl py-2 z-50 animate-fade-in-up">
+                        <button 
+                            onClick={() => { setIsCalendarOpen(true); setIsMenuOpen(false); }}
+                            className="w-full text-left px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-3 transition-colors"
+                        >
+                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                             </svg>
+                             History Calendar
+                        </button>
+                        <button 
+                            onClick={() => { setIsFavoritesOpen(true); setIsMenuOpen(false); }}
+                            className="w-full text-left px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-3 transition-colors"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                            </svg>
+                            Favorites / Quick Add
+                        </button>
+                        <div className="h-px bg-slate-700 my-1 mx-3"></div>
+                        <button 
+                            onClick={() => { setShowApiKeyModal(true); setIsMenuOpen(false); }}
+                            className="w-full text-left px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-3 transition-colors"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${userApiKey ? 'text-emerald-400' : 'text-slate-400'}`} viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 000-2z" clipRule="evenodd" />
+                            </svg>
+                            API Key Settings
+                        </button>
+                    </div>
+                )}
+            </div>
           </div>
         </div>
       </header>
@@ -529,16 +562,6 @@ const App: React.FC = () => {
             >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-            </button>
-             {/* Favorites Button */}
-             <button
-                onClick={() => setIsFavoritesOpen(true)}
-                className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-yellow-400 rounded-xl px-3 flex items-center justify-center transition-all shadow-lg"
-                title="Favorites / Quick Add"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                 </svg>
             </button>
           </div>

@@ -22,22 +22,25 @@ export const FoodDetailModal: React.FC<FoodDetailModalProps> = ({ item, onClose 
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in-up">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto">
+      {/* Changed max-h and overflow handling: Flex container with hidden overflow, content scrolls */}
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-3xl shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[90vh] overflow-hidden">
         
-        {/* Header */}
-        <div className="p-6 pb-2 flex justify-between items-start">
-          <div>
+        {/* Header - Fixed at top */}
+        <div className="p-6 pb-2 flex justify-between items-start shrink-0">
+          <div className="flex-1 pr-4">
             <h2 className="text-2xl font-bold text-white capitalize leading-tight">{item.name}</h2>
             <p className="text-slate-400 text-sm mt-1">Input: {item.quantityStr}</p>
           </div>
-          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-3 py-2 text-center min-w-[80px]">
-            <span className="block text-xl font-bold text-emerald-400">{item.calories}</span>
-            <span className="text-[10px] uppercase font-bold text-emerald-600/80 tracking-wider">Calories</span>
+          <div className="flex flex-col gap-2 items-end">
+             <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-3 py-2 text-center min-w-[80px]">
+                <span className="block text-xl font-bold text-emerald-400">{item.calories}</span>
+                <span className="text-[10px] uppercase font-bold text-emerald-600/80 tracking-wider">Calories</span>
+             </div>
           </div>
         </div>
 
-        {/* Content Grid */}
-        <div className="p-6 space-y-6">
+        {/* Content Grid - Scrollable area */}
+        <div className="p-6 space-y-6 flex-1 overflow-y-auto">
           
           {/* Main Stats Row */}
           <div className="flex flex-col sm:flex-row gap-6">
@@ -164,8 +167,8 @@ export const FoodDetailModal: React.FC<FoodDetailModalProps> = ({ item, onClose 
 
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/50">
+        {/* Footer - Fixed at bottom */}
+        <div className="p-4 border-t border-slate-800 bg-slate-900/50 shrink-0">
            <button 
              onClick={onClose}
              className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold py-3 px-4 rounded-xl transition-colors"
