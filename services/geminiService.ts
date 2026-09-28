@@ -91,7 +91,7 @@ const foodAnalysisSchema: Schema = {
   required: ["foodName", "calories", "protein", "carbs", "fat", "fiber", "sugar", "healthScore", "smartInsights"],
 };
 
-export const analyzeFoodInput = async (input: string, userApiKey?: string): Promise<{
+export interface FoodAnalysis {
   name: string;
   calories: number;
   macros: Macros;
@@ -99,16 +99,9 @@ export const analyzeFoodInput = async (input: string, userApiKey?: string): Prom
   sugar: number;
   healthScore: number;
   smartInsights: string[];
-}> => {
-  try {
-    const ai = getAiClient(userApiKey);
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Analyze the following food input: "${input}". 
-      Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
-      Be realistic with portion sizes if not specified.
-      
-      IMPORTANT: If the input is not a food item or cannot be analyzed, you MUST return a valid JSON object matching the schema with:
+}
+
+const UNKNOWN_ITEM_INSTRUCTIONS = `IMPORTANT: If the input is not a food item or cannot be analyzed, you MUST return a valid JSON object matching the schema with:
       - foodName: "Unknown Item"
       - calories: 0
       - protein: 0
@@ -118,12 +111,19 @@ export const analyzeFoodInput = async (input: string, userApiKey?: string): Prom
       - sugar: 0
       - healthScore: 0
       - smartInsights: ["Could not identify food", "Please try a different description"]
-      
-      Do not return markdown code blocks, just the JSON.`,
+
+      Do not return markdown code blocks, just the JSON.`;
+
+const runAnalysis = async (contents: any, userApiKey?: string): Promise<FoodAnalysis> => {
+  try {
+    const ai = getAiClient(userApiKey);
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents,
       config: {
         responseMimeType: "application/json",
         responseSchema: foodAnalysisSchema,
-        systemInstruction: "You are a professional nutritionist API. Your goal is to accurately estimate nutrition from natural language text. You always respond with valid JSON matching the schema."
+        systemInstruction: "You are a professional nutritionist API. Your goal is to accurately estimate nutrition from natural language text or food photos. You always respond with valid JSON matching the schema."
       },
     });
 
@@ -152,3 +152,21 @@ export const analyzeFoodInput = async (input: string, userApiKey?: string): Prom
     throw new Error(msg);
   }
 };
+
+export const analyzeFoodInput = (input: string, userApiKey?: string): Promise<FoodAnalysis> =>
+  runAnalysis(`Analyze the following food input: "${input}".
+      Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
+      Be realistic with portion sizes if not specified.
+
+      ${UNKNOWN_ITEM_INSTRUCTIONS}`, userApiKey);
+
+// base64Data is raw base64 (no data: prefix). note is optional extra context from the user.
+export const analyzeFoodImage = (base64Data: string, mimeType: string, note: string, userApiKey?: string): Promise<FoodAnalysis> =>
+  runAnalysis([
+    { inlineData: { mimeType, data: base64Data } },
+    { text: `Identify the food in this photo and estimate the portion visible.
+      ${note ? `Additional context from the user: "${note}".` : ''}
+      Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
+
+      ${UNKNOWN_ITEM_INSTRUCTIONS}` },
+  ], userApiKey);

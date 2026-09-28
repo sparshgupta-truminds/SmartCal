@@ -8,7 +8,8 @@ import { ApiKeyModal } from './components/ApiKeyModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FavoritesModal } from './components/FavoritesModal';
 import { EditFoodModal, NEW_ENTRY_ID, NEW_FAVORITE_ID } from './components/EditFoodModal';
-import { analyzeFoodInput } from './services/geminiService';
+import { analyzeFoodInput, analyzeFoodImage, FoodAnalysis } from './services/geminiService';
+import { imageFileToBase64 } from './utils/image';
 import { useApiKey } from './hooks/useApiKey';
 import { useFoodLog, generateId } from './hooks/useFoodLog';
 import { useLocalStorage } from './hooks/useLocalStorage';
@@ -56,6 +57,7 @@ const App: React.FC = () => {
   const [lastAddedId, setLastAddedId] = useState<string | null>(null);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -119,19 +121,17 @@ const App: React.FC = () => {
     setShowSuccessToast(true);
   };
 
-  const handleAddFood = useCallback(async () => {
-    if (!inputText.trim()) return;
-
+  // Shared path for text and photo analysis: run the analysis, then log the result
+  const analyzeAndLog = useCallback(async (analyze: () => Promise<FoodAnalysis>, quantityStr: string) => {
     setStatus(AppStatus.ANALYZING);
     setErrorMessage('');
     setShowSuccessToast(false);
 
     try {
-      // Pass the userApiKey if it exists
-      const analysis = await analyzeFoodInput(inputText, userApiKey);
+      const analysis = await analyze();
 
       if (analysis.name === "Unknown Item") {
-         setErrorMessage("Could not identify this food. Please try a different description.");
+         setErrorMessage("Could not identify this food. Please try a different description or photo.");
          setStatus(AppStatus.ERROR);
          return;
       }
@@ -139,7 +139,7 @@ const App: React.FC = () => {
       logNewItem({
         id: generateId(),
         name: analysis.name,
-        quantityStr: inputText,
+        quantityStr,
         calories: analysis.calories,
         macros: analysis.macros,
         timestamp: timestampForDay(selectedDate),
@@ -157,7 +157,24 @@ const App: React.FC = () => {
       setErrorMessage(error.message || "Could not analyze food. Please check your API key.");
       setStatus(AppStatus.ERROR);
     }
-  }, [inputText, selectedDate, userApiKey]);
+  }, [selectedDate]);
+
+  const handleAddFood = useCallback(() => {
+    if (!inputText.trim()) return;
+    analyzeAndLog(() => analyzeFoodInput(inputText, userApiKey), inputText);
+  }, [inputText, userApiKey, analyzeAndLog]);
+
+  // Any text in the input box is sent along as context for the photo (e.g. "large portion")
+  const handlePhotoSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+    const note = inputText.trim();
+    analyzeAndLog(async () => {
+      const { data, mimeType } = await imageFileToBase64(file);
+      return analyzeFoodImage(data, mimeType, note, userApiKey);
+    }, note || 'From photo');
+  };
 
   const handleManualAddClick = () => setEditingLog(blankItem(NEW_ENTRY_ID, "Manually added item"));
 
@@ -403,6 +420,27 @@ const App: React.FC = () => {
                 </div>
             </div>
             
+            {/* Photo Button */}
+            <button
+                onClick={() => photoInputRef.current?.click()}
+                disabled={status === AppStatus.ANALYZING}
+                className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white rounded-xl px-3 flex items-center justify-center transition-all shadow-lg disabled:opacity-50 disabled:cursor-wait"
+                title="Log from Photo"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+            </button>
+            <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handlePhotoSelected}
+                className="hidden"
+            />
+
             {/* Manual Entry Button */}
             <button
                 onClick={handleManualAddClick}
