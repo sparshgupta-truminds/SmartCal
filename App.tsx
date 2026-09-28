@@ -74,7 +74,9 @@ const App: React.FC = () => {
     setTempGoal(savedGoal || '2000');
 
     // Check for API Key
-    const storedKey = localStorage.getItem('smartcal_api_key');
+    // Key lives in sessionStorage only (cleared when the tab closes); drop any older persistent copy
+    localStorage.removeItem('smartcal_api_key');
+    const storedKey = sessionStorage.getItem('smartcal_api_key');
     if (storedKey) {
         setUserApiKey(storedKey);
     } else {
@@ -290,7 +292,7 @@ const App: React.FC = () => {
   const handleSaveApiKey = () => {
       if (!tempApiKey.trim()) return;
       setUserApiKey(tempApiKey.trim());
-      localStorage.setItem('smartcal_api_key', tempApiKey.trim());
+      sessionStorage.setItem('smartcal_api_key', tempApiKey.trim());
       setShowApiKeyModal(false);
   };
 
