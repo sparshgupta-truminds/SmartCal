@@ -134,10 +134,12 @@ const friendlyErrorMessage = (error: any): string => {
   const code = getStatusCode(error);
   if (code === 503 || code === 500 || code === 504) return "Gemini is busy right now. Please try again in a minute.";
   if (code === 404) return "The AI model is unavailable for your API key. Please try again later.";
-  if (code === 429) return "Rate limit reached for your API key. Wait a bit and try again.";
+  if (code === 429) return "Your API key's free quota is used up. Try again later, or enable billing for the key in Google AI Studio.";
   if (code === 400 || code === 401 || code === 403) return "Your API key was rejected. Check it in API Key Settings.";
   if (error?.message === "API Key is missing.") return "Add your Gemini API key in API Key Settings.";
-  return "Could not analyze food. Please check your connection and try again.";
+  // Unrecognized: include the underlying reason so it can be diagnosed
+  const detail = String(error?.message ?? '').slice(0, 150);
+  return `Could not analyze food${detail ? ` (${detail})` : ''}. Please try again.`;
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -150,8 +152,10 @@ const generateWithFallback = async (ai: GoogleGenAI, request: Omit<Parameters<Go
         return await ai.models.generateContent({ ...request, model });
       } catch (error: any) {
         lastError = error;
-        // Model retired or not enabled for this key: skip straight to the next one
-        if (getStatusCode(error) === 404) break;
+        // Retired model (404) or used-up quota (429, quotas are per model): retrying the
+        // same model won't help, so move straight on to the next one
+        const code = getStatusCode(error);
+        if (code === 404 || code === 429) break;
         if (!isRetryable(error)) throw error;
         if (attempt < RETRIES_PER_MODEL - 1) await sleep(1000 * (attempt + 1));
       }
