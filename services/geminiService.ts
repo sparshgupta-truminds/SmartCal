@@ -114,11 +114,53 @@ const UNKNOWN_ITEM_INSTRUCTIONS = `IMPORTANT: If the input is not a food item or
 
       Do not return markdown code blocks, just the JSON.`;
 
+// Tried in order; the stable model is a fallback when the preview one is overloaded
+const MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"];
+const RETRIES_PER_MODEL = 2;
+
+const getStatusCode = (error: any): number | undefined => {
+  if (typeof error?.status === 'number') return error.status;
+  const match = String(error?.message ?? '').match(/"code"\s*:\s*(\d{3})/);
+  return match ? Number(match[1]) : undefined;
+};
+
+// Overloaded / rate limited / transient server errors are worth retrying
+const isRetryable = (error: any) => {
+  const code = getStatusCode(error);
+  return code === 429 || code === 500 || code === 503 || code === 504;
+};
+
+const friendlyErrorMessage = (error: any): string => {
+  const code = getStatusCode(error);
+  if (code === 503 || code === 500 || code === 504) return "Gemini is busy right now. Please try again in a minute.";
+  if (code === 429) return "Rate limit reached for your API key. Wait a bit and try again.";
+  if (code === 400 || code === 401 || code === 403) return "Your API key was rejected. Check it in API Key Settings.";
+  if (error?.message === "API Key is missing.") return "Add your Gemini API key in API Key Settings.";
+  return "Could not analyze food. Please check your connection and try again.";
+};
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const generateWithFallback = async (ai: GoogleGenAI, request: Omit<Parameters<GoogleGenAI['models']['generateContent']>[0], 'model'>) => {
+  let lastError: any;
+  for (const model of MODELS) {
+    for (let attempt = 0; attempt < RETRIES_PER_MODEL; attempt++) {
+      try {
+        return await ai.models.generateContent({ ...request, model });
+      } catch (error: any) {
+        lastError = error;
+        if (!isRetryable(error)) throw error;
+        if (attempt < RETRIES_PER_MODEL - 1) await sleep(1000 * (attempt + 1));
+      }
+    }
+  }
+  throw lastError;
+};
+
 const runAnalysis = async (contents: any, userApiKey?: string): Promise<FoodAnalysis> => {
   try {
     const ai = getAiClient(userApiKey);
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+    const response = await generateWithFallback(ai, {
       contents,
       config: {
         responseMimeType: "application/json",
@@ -147,9 +189,7 @@ const runAnalysis = async (contents: any, userApiKey?: string): Promise<FoodAnal
     };
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
-    // Extract meaningful error message
-    const msg = error.message || "Failed to analyze food";
-    throw new Error(msg);
+    throw new Error(friendlyErrorMessage(error));
   }
 };
 
