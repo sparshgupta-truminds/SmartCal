@@ -3,41 +3,45 @@ import { CalorieGauge } from './components/CalorieGauge';
 import { MacroChart } from './components/MacroChart';
 import { HistoryCalendar } from './components/HistoryCalendar';
 import { FoodDetailModal } from './components/FoodDetailModal';
-import { analyzeFoodInput, hasEnvApiKey } from './services/geminiService';
-import { FoodItem, Macros, DailyStats, AppStatus } from './types';
+import { ApiKeyModal } from './components/ApiKeyModal';
+import { SettingsModal } from './components/SettingsModal';
+import { FavoritesModal } from './components/FavoritesModal';
+import { EditFoodModal, NEW_ENTRY_ID, NEW_FAVORITE_ID } from './components/EditFoodModal';
+import { analyzeFoodInput } from './services/geminiService';
+import { useApiKey } from './hooks/useApiKey';
+import { useFoodLog, generateId } from './hooks/useFoodLog';
+import { useLocalStorage } from './hooks/useLocalStorage';
+import { isSameDay, timestampForDay } from './utils/date';
+import { FoodItem, AppStatus } from './types';
 
-// Simple UUID generator
-const generateId = () => Math.random().toString(36).substr(2, 9);
-
-// Date Helpers
-const isSameDay = (d1: Date, d2: Date) => {
-  return d1.getFullYear() === d2.getFullYear() &&
-         d1.getMonth() === d2.getMonth() &&
-         d1.getDate() === d2.getDate();
-};
+const blankItem = (id: string, insight: string): FoodItem => ({
+  id,
+  name: '',
+  quantityStr: '1 serving',
+  calories: 0,
+  macros: { protein: 0, carbs: 0, fat: 0 },
+  timestamp: Date.now(),
+  healthScore: 5,
+  smartInsights: [insight],
+});
 
 const App: React.FC = () => {
   // --- State ---
-  const [maintenanceCalories, setMaintenanceCalories] = useState<number>(2000);
-  const [logs, setLogs] = useState<FoodItem[]>([]);
-  const [favorites, setFavorites] = useState<FoodItem[]>([]); // Favorites State
+  const [maintenanceCalories, setMaintenanceCalories] = useLocalStorage<number>('smartcal_goal', 2000);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const { favorites, displayedLogs, logs, dailyStats, addLog, updateLog, deleteLog, addFavorite, deleteFavorite } = useFoodLog(selectedDate);
+  const { apiKey: userApiKey, saveApiKey, showApiKeyModal, setShowApiKeyModal } = useApiKey();
+
   const [inputText, setInputText] = useState('');
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [errorMessage, setErrorMessage] = useState<string>('');
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  
-  // API Key Management
-  const [userApiKey, setUserApiKey] = useState('');
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
-  const [tempApiKey, setTempApiKey] = useState('');
 
   // Settings/Modal States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [tempGoal, setTempGoal] = useState<string>('2000');
-  
+
   // Modal Management
   const [editingLog, setEditingLog] = useState<FoodItem | null>(null);
   const [selectedFoodDetail, setSelectedFoodDetail] = useState<FoodItem | null>(null);
@@ -47,57 +51,6 @@ const App: React.FC = () => {
   const [lastAddedId, setLastAddedId] = useState<string | null>(null);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // --- Effects (Persistence) ---
-  useEffect(() => {
-    const savedGoal = localStorage.getItem('smartcal_goal');
-    if (savedGoal) setMaintenanceCalories(parseInt(savedGoal, 10));
-
-    const savedLogs = localStorage.getItem('smartcal_logs');
-    if (savedLogs) {
-        try {
-            setLogs(JSON.parse(savedLogs));
-        } catch (e) {
-            console.error("Failed to parse logs", e);
-        }
-    }
-
-    const savedFavs = localStorage.getItem('smartcal_favorites');
-    if (savedFavs) {
-        try {
-            setFavorites(JSON.parse(savedFavs));
-        } catch (e) {
-            console.error("Failed to parse favorites", e);
-        }
-    }
-
-    setTempGoal(savedGoal || '2000');
-
-    // Check for API Key
-    // Key lives in sessionStorage only (cleared when the tab closes); drop any older persistent copy
-    localStorage.removeItem('smartcal_api_key');
-    const storedKey = sessionStorage.getItem('smartcal_api_key');
-    if (storedKey) {
-        setUserApiKey(storedKey);
-    } else {
-        // If no stored key, and no env key, show modal
-        if (!hasEnvApiKey()) {
-            setShowApiKeyModal(true);
-        }
-    }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem('smartcal_goal', maintenanceCalories.toString());
-  }, [maintenanceCalories]);
-
-  useEffect(() => {
-    localStorage.setItem('smartcal_logs', JSON.stringify(logs));
-  }, [logs]);
-
-  useEffect(() => {
-    localStorage.setItem('smartcal_favorites', JSON.stringify(favorites));
-  }, [favorites]);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -134,7 +87,7 @@ const App: React.FC = () => {
   const displayDate = useMemo(() => {
       const today = new Date();
       if (isSameDay(selectedDate, today)) return 'Today';
-      
+
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
       if (isSameDay(selectedDate, yesterday)) return 'Yesterday';
@@ -143,20 +96,6 @@ const App: React.FC = () => {
   }, [selectedDate]);
 
   const isToday = isSameDay(selectedDate, new Date());
-
-  // --- Computed Stats (Filtered by Date) ---
-  const displayedLogs = useMemo(() => {
-      return logs.filter(item => isSameDay(new Date(item.timestamp), selectedDate));
-  }, [logs, selectedDate]);
-
-  const dailyStats: DailyStats = useMemo(() => {
-    return displayedLogs.reduce((acc, item) => ({
-      totalCalories: acc.totalCalories + item.calories,
-      totalProtein: acc.totalProtein + item.macros.protein,
-      totalCarbs: acc.totalCarbs + item.macros.carbs,
-      totalFat: acc.totalFat + item.macros.fat,
-    }), { totalCalories: 0, totalProtein: 0, totalCarbs: 0, totalFat: 0 });
-  }, [displayedLogs]);
 
   const remainingCalories = maintenanceCalories - dailyStats.totalCalories;
   const progressRatio = dailyStats.totalCalories / maintenanceCalories;
@@ -169,48 +108,45 @@ const App: React.FC = () => {
   }, [progressRatio]);
 
   // --- Handlers ---
+  const logNewItem = (item: FoodItem) => {
+    addLog(item);
+    setLastAddedId(item.id);
+    setShowSuccessToast(true);
+  };
+
   const handleAddFood = useCallback(async () => {
     if (!inputText.trim()) return;
 
     setStatus(AppStatus.ANALYZING);
     setErrorMessage('');
     setShowSuccessToast(false);
-    
+
     try {
       // Pass the userApiKey if it exists
       const analysis = await analyzeFoodInput(inputText, userApiKey);
-      
+
       if (analysis.name === "Unknown Item") {
          setErrorMessage("Could not identify this food. Please try a different description.");
          setStatus(AppStatus.ERROR);
          return;
       }
 
-      const timestampDate = new Date(selectedDate);
-      const now = new Date();
-      timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
-
-      const newId = generateId();
-      const newItem: FoodItem = {
-        id: newId,
+      logNewItem({
+        id: generateId(),
         name: analysis.name,
         quantityStr: inputText,
         calories: analysis.calories,
         macros: analysis.macros,
-        timestamp: timestampDate.getTime(),
+        timestamp: timestampForDay(selectedDate),
         fiber: analysis.fiber,
         sugar: analysis.sugar,
         healthScore: analysis.healthScore,
         smartInsights: analysis.smartInsights
-      };
-      
-      setLogs(prev => [newItem, ...prev]);
-      setLastAddedId(newId);
+      });
       setStatus(AppStatus.SUCCESS);
-      setShowSuccessToast(true);
       setInputText('');
       setTimeout(() => setStatus(AppStatus.IDLE), 2000);
-      
+
     } catch (error: any) {
       console.error("Analysis failed", error);
       setErrorMessage(error.message || "Could not analyze food. Please check your API key.");
@@ -218,83 +154,25 @@ const App: React.FC = () => {
     }
   }, [inputText, selectedDate, userApiKey]);
 
-  const handleManualAddClick = () => {
-    // Open the edit modal with a blank template
-    setEditingLog({
-      id: 'NEW_ENTRY', // Marker ID
-      name: '',
-      quantityStr: '1 serving',
-      calories: 0,
-      macros: {
-        protein: 0,
-        carbs: 0,
-        fat: 0
-      },
-      timestamp: Date.now(),
-      healthScore: 5,
-      smartInsights: ["Manually added item"]
-    });
-  };
+  const handleManualAddClick = () => setEditingLog(blankItem(NEW_ENTRY_ID, "Manually added item"));
 
-  const handleCreateFavoriteClick = () => {
-    setEditingLog({
-      id: 'NEW_FAVORITE',
-      name: '',
-      quantityStr: '1 serving',
-      calories: 0,
-      macros: { protein: 0, carbs: 0, fat: 0 },
-      timestamp: Date.now(),
-      healthScore: 5,
-      smartInsights: ["Quick add item"] // Default, but auto-fill will overwrite
-    });
-  };
+  const handleCreateFavoriteClick = () => setEditingLog(blankItem(NEW_FAVORITE_ID, "Quick add item"));
 
   const handleQuickLog = (fav: FoodItem) => {
-    const timestampDate = new Date(selectedDate);
-    const now = new Date();
-    timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
-
-    const newLog: FoodItem = {
-        ...fav,
-        id: generateId(),
-        timestamp: timestampDate.getTime()
-    };
-
-    setLogs(prev => [newLog, ...prev]);
-    setLastAddedId(newLog.id);
-    setShowSuccessToast(true);
+    logNewItem({ ...fav, id: generateId(), timestamp: timestampForDay(selectedDate) });
     setIsFavoritesOpen(false); // Close modal on selection
   };
 
-  const handleDeleteFavorite = (id: string) => {
-      setFavorites(prev => prev.filter(f => f.id !== id));
-  };
-
   const handleDeleteLog = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation(); 
-    setLogs(prev => prev.filter(item => item.id !== id));
+    e.stopPropagation();
+    deleteLog(id);
     if (selectedFoodDetail?.id === id) setSelectedFoodDetail(null);
   };
 
   const handleEditClick = (e: React.MouseEvent, item: FoodItem) => {
-    e.stopPropagation(); 
+    e.stopPropagation();
     setEditingLog(item);
   }
-
-  const handleUpdateSettings = () => {
-    const val = parseInt(tempGoal, 10);
-    if (!isNaN(val) && val > 0) {
-      setMaintenanceCalories(val);
-      setIsSettingsOpen(false);
-    }
-  };
-
-  const handleSaveApiKey = () => {
-      if (!tempApiKey.trim()) return;
-      setUserApiKey(tempApiKey.trim());
-      sessionStorage.setItem('smartcal_api_key', tempApiKey.trim());
-      setShowApiKeyModal(false);
-  };
 
   const handleAutoFill = async () => {
     if (!editingLog || !editingLog.name) return;
@@ -304,16 +182,15 @@ const App: React.FC = () => {
         if (analysis.name !== "Unknown Item") {
             setEditingLog(prev => prev ? ({
                 ...prev,
-                name: analysis.name, // optionally update name to normalized name
+                name: analysis.name,
                 calories: analysis.calories,
                 macros: analysis.macros,
-                smartInsights: analysis.smartInsights, // Populates insights from API
+                smartInsights: analysis.smartInsights,
                 healthScore: analysis.healthScore,
                 sugar: analysis.sugar,
                 fiber: analysis.fiber
             }) : null);
         } else {
-             // Optional: visual shake or error inside modal
              alert("Could not identify food. Please try a clearer description.");
         }
     } catch(e) {
@@ -326,59 +203,20 @@ const App: React.FC = () => {
   const handleSaveEditedLog = () => {
     if (!editingLog) return;
 
-    if (editingLog.id === 'NEW_ENTRY') {
-      // Logic for adding a NEW manual item
-      const timestampDate = new Date(selectedDate);
-      const now = new Date();
-      timestampDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
-
-      const newItem: FoodItem = {
+    if (editingLog.id === NEW_ENTRY_ID) {
+      logNewItem({
         ...editingLog,
         id: generateId(),
-        timestamp: timestampDate.getTime(),
-        name: editingLog.name || 'Custom Food', // Ensure name isn't empty
-      };
-      
-      setLogs(prev => [newItem, ...prev]);
-      setLastAddedId(newItem.id);
-      setShowSuccessToast(true);
-    } else if (editingLog.id === 'NEW_FAVORITE') {
-        // Logic for creating a FAVORITE
-        const newFav: FoodItem = {
-            ...editingLog,
-            id: generateId(),
-            name: editingLog.name || 'Custom Favorite'
-        };
-        setFavorites(prev => [...prev, newFav]);
-        // Keep favorites modal open?
-    } else {
-      // Logic for updating EXISTING item
-      setLogs(prev => prev.map(item => item.id === editingLog.id ? editingLog : item));
-    }
-    
-    setEditingLog(null);
-  };
-
-  const updateEditingLogField = (field: keyof FoodItem | keyof Macros, value: string | number) => {
-    if (!editingLog) return;
-    
-    // Allow empty string for temporary editing state, but store numbers as numbers
-    const numValue = value === '' ? 0 : Number(value);
-
-    if (field === 'protein' || field === 'carbs' || field === 'fat') {
-       setEditingLog({
-         ...editingLog,
-         macros: {
-           ...editingLog.macros,
-           [field]: numValue
-         }
-       });
-    } else {
-      setEditingLog({
-        ...editingLog,
-        [field]: field === 'name' || field === 'quantityStr' ? value : numValue
+        timestamp: timestampForDay(selectedDate),
+        name: editingLog.name || 'Custom Food',
       });
+    } else if (editingLog.id === NEW_FAVORITE_ID) {
+      addFavorite({ ...editingLog, id: generateId(), name: editingLog.name || 'Custom Favorite' });
+    } else {
+      updateLog(editingLog);
     }
+
+    setEditingLog(null);
   };
 
   return (
@@ -644,94 +482,20 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* API Key Modal */}
       {showApiKeyModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-              <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
-                  <div className="flex flex-col items-center text-center mb-6">
-                      <div className="w-12 h-12 bg-emerald-500/10 rounded-full flex items-center justify-center mb-4">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8v0z" />
-                        </svg>
-                      </div>
-                      <h3 className="text-xl font-bold mb-2">Enter Gemini API Key</h3>
-                      <p className="text-slate-400 text-sm">
-                          To analyze your food, this app needs a Gemini API Key from Google AI Studio.
-                      </p>
-                  </div>
-                  
-                  <div className="mb-6">
-                      <label className="block text-xs font-medium text-slate-500 uppercase mb-2">API Key</label>
-                      <input 
-                          type="password" 
-                          value={tempApiKey}
-                          onChange={(e) => setTempApiKey(e.target.value)}
-                          placeholder="AIzaSy..."
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      />
-                      <div className="mt-2 text-center">
-                          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-xs text-emerald-500 hover:text-emerald-400 underline">
-                              Get a free key here
-                          </a>
-                      </div>
-                  </div>
-                  
-                  <button 
-                      onClick={handleSaveApiKey}
-                      disabled={!tempApiKey.trim()}
-                      className="w-full px-4 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-900 font-bold transition-colors"
-                  >
-                      Save Key
-                  </button>
-                  <button 
-                      onClick={() => setShowApiKeyModal(false)}
-                      className="w-full mt-3 px-4 py-2 text-sm text-slate-500 hover:text-slate-400"
-                  >
-                      Cancel
-                  </button>
-              </div>
-          </div>
+          <ApiKeyModal onSave={saveApiKey} onClose={() => setShowApiKeyModal(false)} />
       )}
 
-      {/* Settings Modal */}
       {isSettingsOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
-              <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
-                  <h3 className="text-xl font-bold mb-2">App Settings</h3>
-                  
-                  <div className="mb-6 space-y-4">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-500 uppercase mb-2">Daily Goal (kcal)</label>
-                        <input 
-                          type="number" 
-                          value={tempGoal}
-                          onChange={(e) => setTempGoal(e.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                      <button 
-                        onClick={() => setIsSettingsOpen(false)}
-                        className="flex-1 px-4 py-2 rounded-lg text-slate-400 font-medium hover:bg-slate-800 transition-colors"
-                      >
-                          Cancel
-                      </button>
-                      <button 
-                        onClick={handleUpdateSettings}
-                        className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold transition-colors"
-                      >
-                          Save
-                      </button>
-                  </div>
-              </div>
-          </div>
+          <SettingsModal
+              goal={maintenanceCalories}
+              onSave={(goal) => { setMaintenanceCalories(goal); setIsSettingsOpen(false); }}
+              onClose={() => setIsSettingsOpen(false)}
+          />
       )}
 
-       {/* Calendar Modal */}
        {isCalendarOpen && (
-           <HistoryCalendar 
+           <HistoryCalendar
                 logs={logs}
                 onSelectDate={setSelectedDate}
                 onClose={() => setIsCalendarOpen(false)}
@@ -740,184 +504,32 @@ const App: React.FC = () => {
            />
        )}
 
-      {/* Favorites List Modal */}
       {isFavoritesOpen && (
-           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in-up">
-              <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl flex flex-col max-h-[85vh]">
-                  <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                             <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                          </svg>
-                          Quick Add
-                      </h3>
-                      <button onClick={() => setIsFavoritesOpen(false)} className="p-1 hover:bg-slate-800 rounded-full text-slate-400">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                      </button>
-                  </div>
-                  
-                  <div className="flex-1 overflow-y-auto pr-1 space-y-3 mb-4">
-                      {favorites.length === 0 ? (
-                          <div className="text-center py-8 text-slate-500">
-                              <p className="text-sm">No favorites added yet.</p>
-                              <p className="text-xs mt-1">Create shortcuts for foods you eat often.</p>
-                          </div>
-                      ) : (
-                          favorites.map(fav => (
-                              <div key={fav.id} className="group flex items-center bg-slate-800 p-3 rounded-xl border border-slate-700/50 hover:border-emerald-500/30 transition-all cursor-pointer" onClick={() => handleQuickLog(fav)}>
-                                  <div className="flex-1">
-                                      <p className="font-bold text-slate-200">{fav.name}</p>
-                                      <p className="text-xs text-slate-500">{fav.calories} kcal • {fav.macros.protein}p {fav.macros.carbs}c {fav.macros.fat}f</p>
-                                  </div>
-                                  <button 
-                                      onClick={(e) => { e.stopPropagation(); handleDeleteFavorite(fav.id); }}
-                                      className="p-2 text-slate-600 hover:text-red-400 hover:bg-slate-900 rounded-lg transition-colors"
-                                  >
-                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                                      </svg>
-                                  </button>
-                              </div>
-                          ))
-                      )}
-                  </div>
-
-                  <button 
-                      onClick={handleCreateFavoriteClick}
-                      className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border-2 border-dashed border-slate-600 hover:border-emerald-500 text-slate-400 hover:text-white transition-all font-medium flex items-center justify-center gap-2"
-                  >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                         <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
-                      </svg>
-                      Add New Favorite
-                  </button>
-              </div>
-           </div>
+          <FavoritesModal
+              favorites={favorites}
+              onQuickLog={handleQuickLog}
+              onDelete={deleteFavorite}
+              onCreate={handleCreateFavoriteClick}
+              onClose={() => setIsFavoritesOpen(false)}
+          />
       )}
 
-       {/* Food Detail Modal */}
        {selectedFoodDetail && (
-           <FoodDetailModal 
-              item={selectedFoodDetail} 
-              onClose={() => setSelectedFoodDetail(null)} 
+           <FoodDetailModal
+              item={selectedFoodDetail}
+              onClose={() => setSelectedFoodDetail(null)}
            />
        )}
 
-      {/* Edit Log Modal */}
       {editingLog && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
-              <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
-                  <h3 className="text-xl font-bold mb-1">
-                    {editingLog.id === 'NEW_ENTRY' ? 'Add Custom Food' : 
-                     editingLog.id === 'NEW_FAVORITE' ? 'Add Common Food' : 'Edit Food Details'}
-                  </h3>
-                  <p className="text-slate-400 text-sm mb-6">
-                    {editingLog.id === 'NEW_ENTRY' ? 'Enter info manually or use Auto-Fill.' : 
-                     editingLog.id === 'NEW_FAVORITE' ? 'Create a shortcut. Type a name and Auto-Fill.' :
-                     'Update nutrition information manually.'}
-                  </p>
-                  
-                  <div className="space-y-4 mb-8">
-                      <div>
-                          <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Food Description</label>
-                          <div className="flex gap-2">
-                            <input 
-                                type="text" 
-                                value={editingLog.name}
-                                onChange={(e) => updateEditingLogField('name', e.target.value)}
-                                placeholder="e.g. 200g Chicken Breast"
-                                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600"
-                            />
-                            {/* Auto-Fill Button for New Items */}
-                            {(editingLog.id === 'NEW_ENTRY' || editingLog.id === 'NEW_FAVORITE') && (
-                                <button 
-                                    onClick={handleAutoFill}
-                                    disabled={!editingLog.name || isModalAnalyzing}
-                                    className="px-3 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 rounded-lg border border-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                    title="Auto-Fill Macros from Description"
-                                >
-                                    {isModalAnalyzing ? (
-                                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                        </svg>
-                                    ) : (
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
-                                        </svg>
-                                    )}
-                                </button>
-                            )}
-                          </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Calories</label>
-                            <input 
-                              type="number" 
-                              value={editingLog.calories}
-                              onChange={(e) => updateEditingLogField('calories', e.target.value)}
-                              placeholder="0"
-                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600"
-                            />
-                        </div>
-                        <div>
-                             <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Protein (g)</label>
-                             <input 
-                               type="number" 
-                               value={editingLog.macros.protein}
-                               onChange={(e) => updateEditingLogField('protein', e.target.value)}
-                               placeholder="0"
-                               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-600"
-                             />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Carbs (g)</label>
-                            <input 
-                              type="number" 
-                              value={editingLog.macros.carbs}
-                              onChange={(e) => updateEditingLogField('carbs', e.target.value)}
-                              placeholder="0"
-                              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600"
-                            />
-                        </div>
-                        <div>
-                             <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Fat (g)</label>
-                             <input 
-                               type="number" 
-                               value={editingLog.macros.fat}
-                               onChange={(e) => updateEditingLogField('fat', e.target.value)}
-                               placeholder="0"
-                               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-slate-600"
-                             />
-                        </div>
-                      </div>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                      <button 
-                        onClick={() => setEditingLog(null)}
-                        className="flex-1 px-4 py-2 rounded-lg text-slate-400 font-medium hover:bg-slate-800 transition-colors"
-                      >
-                          Cancel
-                      </button>
-                      <button 
-                        onClick={handleSaveEditedLog}
-                        disabled={!editingLog.name || isModalAnalyzing}
-                        className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-900 font-bold transition-colors"
-                      >
-                          {editingLog.id === 'NEW_ENTRY' ? 'Add Item' : 
-                           editingLog.id === 'NEW_FAVORITE' ? 'Save Favorite' : 'Save Changes'}
-                      </button>
-                  </div>
-              </div>
-          </div>
+          <EditFoodModal
+              item={editingLog}
+              onChange={setEditingLog}
+              onAutoFill={handleAutoFill}
+              isAnalyzing={isModalAnalyzing}
+              onSave={handleSaveEditedLog}
+              onClose={() => setEditingLog(null)}
+          />
       )}
     </div>
   );
