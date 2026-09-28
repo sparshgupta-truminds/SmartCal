@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { CalorieGauge } from './components/CalorieGauge';
 import { MacroChart } from './components/MacroChart';
+import { MacroProgress } from './components/MacroProgress';
 import { HistoryCalendar } from './components/HistoryCalendar';
 import { FoodDetailModal } from './components/FoodDetailModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -12,7 +13,8 @@ import { useApiKey } from './hooks/useApiKey';
 import { useFoodLog, generateId } from './hooks/useFoodLog';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { isSameDay, timestampForDay } from './utils/date';
-import { FoodItem, AppStatus } from './types';
+import { defaultMacroGoals } from './utils/macros';
+import { FoodItem, Macros, AppStatus } from './types';
 
 const blankItem = (id: string, insight: string): FoodItem => ({
   id,
@@ -28,6 +30,9 @@ const blankItem = (id: string, insight: string): FoodItem => ({
 const App: React.FC = () => {
   // --- State ---
   const [maintenanceCalories, setMaintenanceCalories] = useLocalStorage<number>('smartcal_goal', 2000);
+  // null = derive from the calorie goal
+  const [customMacroGoals, setCustomMacroGoals] = useLocalStorage<Macros | null>('smartcal_macro_goals', null);
+  const macroGoals = customMacroGoals ?? defaultMacroGoals(maintenanceCalories);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const { favorites, displayedLogs, logs, dailyStats, addLog, updateLog, deleteLog, addFavorite, deleteFavorite } = useFoodLog(selectedDate);
   const { apiKey: userApiKey, saveApiKey, showApiKeyModal, setShowApiKeyModal } = useApiKey();
@@ -347,6 +352,10 @@ const App: React.FC = () => {
                      carbs: dailyStats.totalCarbs,
                      fat: dailyStats.totalFat
                  }} />
+                 <MacroProgress
+                     current={{ protein: dailyStats.totalProtein, carbs: dailyStats.totalCarbs, fat: dailyStats.totalFat }}
+                     goals={macroGoals}
+                 />
              </div>
           </div>
         </section>
@@ -489,7 +498,8 @@ const App: React.FC = () => {
       {isSettingsOpen && (
           <SettingsModal
               goal={maintenanceCalories}
-              onSave={(goal) => { setMaintenanceCalories(goal); setIsSettingsOpen(false); }}
+              macroGoals={customMacroGoals}
+              onSave={(goal, macros) => { setMaintenanceCalories(goal); setCustomMacroGoals(macros); setIsSettingsOpen(false); }}
               onClose={() => setIsSettingsOpen(false)}
           />
       )}
