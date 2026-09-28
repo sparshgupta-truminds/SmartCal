@@ -115,7 +115,7 @@ const UNKNOWN_ITEM_INSTRUCTIONS = `IMPORTANT: If the input is not a food item or
       Do not return markdown code blocks, just the JSON.`;
 
 // Tried in order; the stable model is a fallback when the preview one is overloaded
-const MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"];
+const MODELS = ["gemini-3-flash-preview", "gemini-3.8-flash"];
 const RETRIES_PER_MODEL = 2;
 
 const getStatusCode = (error: any): number | undefined => {
@@ -133,6 +133,7 @@ const isRetryable = (error: any) => {
 const friendlyErrorMessage = (error: any): string => {
   const code = getStatusCode(error);
   if (code === 503 || code === 500 || code === 504) return "Gemini is busy right now. Please try again in a minute.";
+  if (code === 404) return "The AI model is unavailable for your API key. Please try again later.";
   if (code === 429) return "Rate limit reached for your API key. Wait a bit and try again.";
   if (code === 400 || code === 401 || code === 403) return "Your API key was rejected. Check it in API Key Settings.";
   if (error?.message === "API Key is missing.") return "Add your Gemini API key in API Key Settings.";
@@ -149,6 +150,8 @@ const generateWithFallback = async (ai: GoogleGenAI, request: Omit<Parameters<Go
         return await ai.models.generateContent({ ...request, model });
       } catch (error: any) {
         lastError = error;
+        // Model retired or not enabled for this key: skip straight to the next one
+        if (getStatusCode(error) === 404) break;
         if (!isRetryable(error)) throw error;
         if (attempt < RETRIES_PER_MODEL - 1) await sleep(1000 * (attempt + 1));
       }
