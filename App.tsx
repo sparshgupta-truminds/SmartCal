@@ -7,7 +7,7 @@ import { FoodDetailModal } from './components/FoodDetailModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FavoritesModal } from './components/FavoritesModal';
-import { EditFoodModal, NEW_ENTRY_ID, NEW_FAVORITE_ID } from './components/EditFoodModal';
+import { EditFoodModal, NEW_ENTRY_ID, NEW_FAVORITE_ID, REVIEW_ENTRY_ID } from './components/EditFoodModal';
 import { analyzeFoodInput, analyzeFoodImage, FoodAnalysis, PRIMARY_MODEL } from './services/geminiService';
 import { imageFileToBase64 } from './utils/image';
 import { useApiKey } from './hooks/useApiKey';
@@ -15,6 +15,7 @@ import { useFoodLog, generateId } from './hooks/useFoodLog';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { isSameDay, timestampForDay } from './utils/date';
 import { defaultMacroGoals } from './utils/macros';
+import { MEAL_TYPES, mealForTime } from './utils/meals';
 import { FoodItem, Macros, AppStatus } from './types';
 
 const blankItem = (id: string, insight: string): FoodItem => ({
@@ -26,6 +27,7 @@ const blankItem = (id: string, insight: string): FoodItem => ({
   timestamp: Date.now(),
   healthScore: 5,
   smartInsights: [insight],
+  mealType: mealForTime(new Date()),
 });
 
 const App: React.FC = () => {
@@ -105,6 +107,14 @@ const App: React.FC = () => {
 
   const isToday = isSameDay(selectedDate, new Date());
 
+  // Day's log grouped by meal; entries without a meal type are placed by time of day
+  const mealGroups = useMemo(() => MEAL_TYPES.map(({ value, label }) => {
+      const items = displayedLogs
+          .filter(item => (item.mealType ?? mealForTime(new Date(item.timestamp))) === value)
+          .sort((a, b) => a.timestamp - b.timestamp);
+      return { value, label, items, calories: items.reduce((sum, i) => sum + i.calories, 0) };
+  }).filter(g => g.items.length > 0), [displayedLogs]);
+
   const remainingCalories = maintenanceCalories - dailyStats.totalCalories;
   const progressRatio = dailyStats.totalCalories / maintenanceCalories;
 
@@ -137,8 +147,9 @@ const App: React.FC = () => {
          return;
       }
 
-      logNewItem({
-        id: generateId(),
+      // Let the user confirm or adjust the estimate before it's logged
+      setEditingLog({
+        id: REVIEW_ENTRY_ID,
         name: analysis.name,
         quantityStr,
         calories: analysis.calories,
@@ -148,11 +159,11 @@ const App: React.FC = () => {
         sugar: analysis.sugar,
         healthScore: analysis.healthScore,
         smartInsights: analysis.smartInsights,
-        aiModel: analysis.model
+        aiModel: analysis.model,
+        mealType: mealForTime(new Date())
       });
-      setStatus(AppStatus.SUCCESS);
+      setStatus(AppStatus.IDLE);
       setInputText('');
-      setTimeout(() => setStatus(AppStatus.IDLE), 2000);
 
     } catch (error: any) {
       console.error("Analysis failed", error);
@@ -183,7 +194,7 @@ const App: React.FC = () => {
   const handleCreateFavoriteClick = () => setEditingLog(blankItem(NEW_FAVORITE_ID, "Quick add item"));
 
   const handleQuickLog = (fav: FoodItem) => {
-    logNewItem({ ...fav, id: generateId(), timestamp: timestampForDay(selectedDate) });
+    logNewItem({ ...fav, id: generateId(), timestamp: timestampForDay(selectedDate), mealType: mealForTime(new Date()) });
     setIsFavoritesOpen(false); // Close modal on selection
   };
 
@@ -229,7 +240,7 @@ const App: React.FC = () => {
   const handleSaveEditedLog = () => {
     if (!editingLog) return;
 
-    if (editingLog.id === NEW_ENTRY_ID) {
+    if (editingLog.id === NEW_ENTRY_ID || editingLog.id === REVIEW_ENTRY_ID) {
       logNewItem({
         ...editingLog,
         id: generateId(),
@@ -245,6 +256,48 @@ const App: React.FC = () => {
     setEditingLog(null);
     setAutoFillError('');
   };
+
+  const renderLogItem = (item: FoodItem) => (
+    <div 
+        key={item.id} 
+        onClick={() => setSelectedFoodDetail(item)}
+        className={`group bg-slate-800 hover:bg-slate-800/80 cursor-pointer transition-colors p-4 rounded-2xl flex justify-between items-center border border-slate-700/50 ${item.id === lastAddedId ? 'animate-slide-in border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.1)]' : ''}`}
+    >
+        <div className="flex-1">
+            <h4 className="font-medium text-slate-200 capitalize">{item.name}</h4>
+            <p className="text-xs text-slate-500 mt-0.5">{item.quantityStr}</p>
+            {item.aiModel && item.aiModel !== PRIMARY_MODEL && (
+                <p className="text-[10px] text-amber-400/80 mt-0.5" title={`Estimated with ${item.aiModel}`}>Estimated with backup model</p>
+            )}
+            <div className="flex gap-2 mt-2 text-[10px] text-slate-400 font-mono">
+                <span className="bg-slate-900 px-1.5 py-0.5 rounded">P: {item.macros.protein}g</span>
+                <span className="bg-slate-900 px-1.5 py-0.5 rounded">C: {item.macros.carbs}g</span>
+                <span className="bg-slate-900 px-1.5 py-0.5 rounded">F: {item.macros.fat}g</span>
+            </div>
+        </div>
+        <div className="flex flex-col items-end gap-2 ml-4">
+            <span className="text-emerald-400 font-bold text-lg">{item.calories} <span className="text-xs font-normal text-slate-500">kcal</span></span>
+            <div className="flex gap-1">
+                <button 
+                    onClick={(e) => handleEditClick(e, item)}
+                    className="text-slate-600 hover:text-cyan-400 transition-colors p-1.5 rounded-lg hover:bg-slate-700"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                    </svg>
+                </button>
+                <button 
+                    onClick={(e) => handleDeleteLog(e, item.id)}
+                    className="text-slate-600 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-slate-700"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-emerald-500/30">
@@ -478,45 +531,15 @@ const App: React.FC = () => {
                     <p className="text-slate-600 text-sm">Type what you ate above to add it!</p>
                 </div>
             ) : (
-                <div className="space-y-3">
-                    {displayedLogs.map(item => (
-                        <div 
-                            key={item.id} 
-                            onClick={() => setSelectedFoodDetail(item)}
-                            className={`group bg-slate-800 hover:bg-slate-800/80 cursor-pointer transition-colors p-4 rounded-2xl flex justify-between items-center border border-slate-700/50 ${item.id === lastAddedId ? 'animate-slide-in border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.1)]' : ''}`}
-                        >
-                            <div className="flex-1">
-                                <h4 className="font-medium text-slate-200 capitalize">{item.name}</h4>
-                                <p className="text-xs text-slate-500 mt-0.5">{item.quantityStr}</p>
-                                {item.aiModel && item.aiModel !== PRIMARY_MODEL && (
-                                    <p className="text-[10px] text-amber-400/80 mt-0.5" title={`Estimated with ${item.aiModel}`}>Estimated with backup model</p>
-                                )}
-                                <div className="flex gap-2 mt-2 text-[10px] text-slate-400 font-mono">
-                                    <span className="bg-slate-900 px-1.5 py-0.5 rounded">P: {item.macros.protein}g</span>
-                                    <span className="bg-slate-900 px-1.5 py-0.5 rounded">C: {item.macros.carbs}g</span>
-                                    <span className="bg-slate-900 px-1.5 py-0.5 rounded">F: {item.macros.fat}g</span>
-                                </div>
+                <div className="space-y-5">
+                    {mealGroups.map(group => (
+                        <div key={group.value}>
+                            <div className="flex justify-between items-baseline mb-2 px-1">
+                                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">{group.label}</h3>
+                                <span className="text-xs text-slate-500">{group.calories} kcal</span>
                             </div>
-                            <div className="flex flex-col items-end gap-2 ml-4">
-                                <span className="text-emerald-400 font-bold text-lg">{item.calories} <span className="text-xs font-normal text-slate-500">kcal</span></span>
-                                <div className="flex gap-1">
-                                    <button 
-                                        onClick={(e) => handleEditClick(e, item)}
-                                        className="text-slate-600 hover:text-cyan-400 transition-colors p-1.5 rounded-lg hover:bg-slate-700"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                                        </svg>
-                                    </button>
-                                    <button 
-                                        onClick={(e) => handleDeleteLog(e, item.id)}
-                                        className="text-slate-600 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-slate-700"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                                        </svg>
-                                    </button>
-                                </div>
+                            <div className="space-y-3">
+                                {group.items.map(renderLogItem)}
                             </div>
                         </div>
                     ))}

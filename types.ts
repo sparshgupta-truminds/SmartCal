@@ -4,6 +4,8 @@ export interface Macros {
   fat: number;
 }
 
+export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+
 export interface FoodItem {
   id: string;
   name: string;
@@ -15,6 +17,7 @@ export interface FoodItem {
   sugar?: number;
   healthScore?: number; // 1-10
   smartInsights?: string[]; 
+  mealType?: MealType; // older entries don't have one; they're grouped by time of day
   aiModel?: string; // Gemini model that produced the estimate, if AI-analyzed
   timestamp: number;
 }

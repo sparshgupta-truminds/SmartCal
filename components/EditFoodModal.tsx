@@ -1,8 +1,11 @@
 import React from 'react';
-import { FoodItem, Macros } from '../types';
+import { FoodItem, Macros, MealType } from '../types';
+import { MEAL_TYPES } from '../utils/meals';
 
 export const NEW_ENTRY_ID = 'NEW_ENTRY';
 export const NEW_FAVORITE_ID = 'NEW_FAVORITE';
+// An AI estimate waiting for the user to confirm it
+export const REVIEW_ENTRY_ID = 'REVIEW_ENTRY';
 
 interface EditFoodModalProps {
   item: FoodItem;
@@ -32,11 +35,13 @@ export const EditFoodModal: React.FC<EditFoodModalProps> = ({ item, onChange, on
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
         <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
             <h3 className="text-xl font-bold mb-1">
-              {item.id === NEW_ENTRY_ID ? 'Add Custom Food' :
+              {item.id === REVIEW_ENTRY_ID ? 'Review Estimate' :
+               item.id === NEW_ENTRY_ID ? 'Add Custom Food' :
                item.id === NEW_FAVORITE_ID ? 'Add Common Food' : 'Edit Food Details'}
             </h3>
             <p className="text-slate-400 text-sm mb-6">
-              {item.id === NEW_ENTRY_ID ? 'Enter info manually or use Auto-Fill.' :
+              {item.id === REVIEW_ENTRY_ID ? 'Check the AI estimate and adjust anything that looks off.' :
+               item.id === NEW_ENTRY_ID ? 'Enter info manually or use Auto-Fill.' :
                item.id === NEW_FAVORITE_ID ? 'Create a shortcut. Type a name and Auto-Fill.' :
                'Update nutrition information manually.'}
             </p>
@@ -75,6 +80,27 @@ export const EditFoodModal: React.FC<EditFoodModalProps> = ({ item, onChange, on
                     </div>
                     {error && <p className="text-red-400 text-xs mt-1.5">{error}</p>}
                 </div>
+
+                {/* Favorites are logged into whatever meal is current, so they don't get one */}
+                {item.id !== NEW_FAVORITE_ID && (
+                  <div>
+                      <label className="block text-xs font-medium text-slate-500 uppercase mb-1.5">Meal</label>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {MEAL_TYPES.map(({ value, label }) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => onChange({ ...item, mealType: value as MealType })}
+                            className={`py-1.5 rounded-lg text-xs font-medium border transition-colors ${item.mealType === value
+                                ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400'
+                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'}`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -135,7 +161,8 @@ export const EditFoodModal: React.FC<EditFoodModalProps> = ({ item, onChange, on
                   disabled={!item.name || isAnalyzing}
                   className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-900 font-bold transition-colors"
                 >
-                    {item.id === NEW_ENTRY_ID ? 'Add Item' :
+                    {item.id === REVIEW_ENTRY_ID ? 'Log Food' :
+                     item.id === NEW_ENTRY_ID ? 'Add Item' :
                      item.id === NEW_FAVORITE_ID ? 'Save Favorite' : 'Save Changes'}
                 </button>
             </div>
