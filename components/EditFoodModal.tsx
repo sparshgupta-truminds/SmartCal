@@ -9,11 +9,12 @@ interface EditFoodModalProps {
   onChange: (item: FoodItem) => void;
   onAutoFill: () => void;
   isAnalyzing: boolean;
+  error?: string;
   onSave: () => void;
   onClose: () => void;
 }
 
-export const EditFoodModal: React.FC<EditFoodModalProps> = ({ item, onChange, onAutoFill, isAnalyzing, onSave, onClose }) => {
+export const EditFoodModal: React.FC<EditFoodModalProps> = ({ item, onChange, onAutoFill, isAnalyzing, error, onSave, onClose }) => {
   const isNew = item.id === NEW_ENTRY_ID || item.id === NEW_FAVORITE_ID;
 
   const updateField = (field: keyof FoodItem | keyof Macros, value: string | number) => {
@@ -72,6 +73,7 @@ export const EditFoodModal: React.FC<EditFoodModalProps> = ({ item, onChange, on
                           </button>
                       )}
                     </div>
+                    {error && <p className="text-red-400 text-xs mt-1.5">{error}</p>}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">

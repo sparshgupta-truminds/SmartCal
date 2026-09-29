@@ -15,6 +15,7 @@ export interface FoodItem {
   sugar?: number;
   healthScore?: number; // 1-10
   smartInsights?: string[]; 
+  aiModel?: string; // Gemini model that produced the estimate, if AI-analyzed
   timestamp: number;
 }
 

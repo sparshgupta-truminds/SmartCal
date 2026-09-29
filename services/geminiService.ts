@@ -99,6 +99,7 @@ export interface FoodAnalysis {
   sugar: number;
   healthScore: number;
   smartInsights: string[];
+  model: string; // which Gemini model produced the result
 }
 
 const UNKNOWN_ITEM_INSTRUCTIONS = `IMPORTANT: If the input is not a food item or cannot be analyzed, you MUST return a valid JSON object matching the schema with:
@@ -115,7 +116,8 @@ const UNKNOWN_ITEM_INSTRUCTIONS = `IMPORTANT: If the input is not a food item or
       Do not return markdown code blocks, just the JSON.`;
 
 // Tried in order; the stable model is a fallback when the preview one is overloaded
-const MODELS = ["gemini-3-flash-preview", "gemini-3.8-flash"];
+export const PRIMARY_MODEL = "gemini-3-flash-preview";
+const MODELS = [PRIMARY_MODEL, "gemini-3.8-flash"];
 const RETRIES_PER_MODEL = 2;
 
 const getStatusCode = (error: any): number | undefined => {
@@ -144,21 +146,61 @@ const friendlyErrorMessage = (error: any): string => {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Model found via the API when every configured model is unavailable (cached for the session)
+let discoveredModel: string | null = null;
+
+// Ask the API which models this key can use and pick the newest non-lite Flash model
+const discoverFlashModel = async (ai: GoogleGenAI, exclude: string[]): Promise<string | null> => {
+  try {
+    const names: string[] = [];
+    for await (const m of await ai.models.list()) {
+      const name = (m.name ?? '').replace(/^models\//, '');
+      const canGenerate = !m.supportedActions || m.supportedActions.includes('generateContent');
+      if (canGenerate && /^gemini-.*flash/.test(name) && !name.includes('lite') && !exclude.includes(name)) {
+        names.push(name);
+      }
+    }
+    names.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    return names[0] ?? null;
+  } catch (e) {
+    console.error("Model discovery failed", e);
+    return null;
+  }
+};
+
 const generateWithFallback = async (ai: GoogleGenAI, request: Omit<Parameters<GoogleGenAI['models']['generateContent']>[0], 'model'>) => {
   let lastError: any;
-  for (const model of MODELS) {
+  let allUnavailable = true;
+  const tryModel = async (model: string) => {
     for (let attempt = 0; attempt < RETRIES_PER_MODEL; attempt++) {
       try {
-        return await ai.models.generateContent({ ...request, model });
+        return { response: await ai.models.generateContent({ ...request, model }), model };
       } catch (error: any) {
         lastError = error;
         // Retired model (404) or used-up quota (429, quotas are per model): retrying the
         // same model won't help, so move straight on to the next one
         const code = getStatusCode(error);
-        if (code === 404 || code === 429) break;
+        if (code !== 404) allUnavailable = false;
+        if (code === 404 || code === 429) return null;
         if (!isRetryable(error)) throw error;
         if (attempt < RETRIES_PER_MODEL - 1) await sleep(1000 * (attempt + 1));
       }
+    }
+    return null;
+  };
+
+  const models = discoveredModel ? [...MODELS, discoveredModel] : MODELS;
+  for (const model of models) {
+    const result = await tryModel(model);
+    if (result) return result;
+  }
+
+  // Every model name we know is gone for this key: look one up
+  if (allUnavailable && !discoveredModel) {
+    discoveredModel = await discoverFlashModel(ai, MODELS);
+    if (discoveredModel) {
+      const result = await tryModel(discoveredModel);
+      if (result) return result;
     }
   }
   throw lastError;
@@ -167,7 +209,7 @@ const generateWithFallback = async (ai: GoogleGenAI, request: Omit<Parameters<Go
 const runAnalysis = async (contents: any, userApiKey?: string): Promise<FoodAnalysis> => {
   try {
     const ai = getAiClient(userApiKey);
-    const response = await generateWithFallback(ai, {
+    const { response, model } = await generateWithFallback(ai, {
       contents,
       config: {
         responseMimeType: "application/json",
@@ -193,6 +235,7 @@ const runAnalysis = async (contents: any, userApiKey?: string): Promise<FoodAnal
       sugar: data.sugar || 0,
       healthScore: data.healthScore || 5,
       smartInsights: data.smartInsights || ["Enjoy your meal!"],
+      model,
     };
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
@@ -200,7 +243,45 @@ const runAnalysis = async (contents: any, userApiKey?: string): Promise<FoodAnal
   }
 };
 
-export const analyzeFoodInput = (input: string, userApiKey?: string): Promise<FoodAnalysis> =>
+// Text results are cached so repeated entries (e.g. "1 glass milk") don't use API quota
+const CACHE_KEY = 'smartcal_analysis_cache';
+const CACHE_LIMIT = 200;
+
+const normalizeInput = (input: string) => input.trim().toLowerCase().replace(/\s+/g, ' ');
+
+const readCache = (): Record<string, FoodAnalysis> => {
+  try {
+    return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+  } catch {
+    return {};
+  }
+};
+
+const writeCache = (key: string, analysis: FoodAnalysis) => {
+  try {
+    const cache = readCache();
+    delete cache[key];
+    cache[key] = analysis;
+    // Drop the oldest entries (insertion order) beyond the limit
+    const keys = Object.keys(cache);
+    for (const k of keys.slice(0, Math.max(0, keys.length - CACHE_LIMIT))) delete cache[k];
+    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+  } catch (e) {
+    console.error("Failed to cache analysis", e);
+  }
+};
+
+export const analyzeFoodInput = async (input: string, userApiKey?: string): Promise<FoodAnalysis> => {
+  const key = normalizeInput(input);
+  const cached = readCache()[key];
+  if (cached) return cached;
+
+  const analysis = await analyzeFoodText(input, userApiKey);
+  if (analysis.name !== "Unknown Item") writeCache(key, analysis);
+  return analysis;
+};
+
+const analyzeFoodText = (input: string, userApiKey?: string): Promise<FoodAnalysis> =>
   runAnalysis(`Analyze the following food input: "${input}".
       Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
       Be realistic with portion sizes if not specified.
