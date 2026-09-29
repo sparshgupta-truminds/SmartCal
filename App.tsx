@@ -8,7 +8,7 @@ import { ApiKeyModal } from './components/ApiKeyModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FavoritesModal } from './components/FavoritesModal';
 import { EditFoodModal, NEW_ENTRY_ID, NEW_FAVORITE_ID } from './components/EditFoodModal';
-import { analyzeFoodInput, analyzeFoodImage, FoodAnalysis } from './services/geminiService';
+import { analyzeFoodInput, analyzeFoodImage, FoodAnalysis, PRIMARY_MODEL } from './services/geminiService';
 import { imageFileToBase64 } from './utils/image';
 import { useApiKey } from './hooks/useApiKey';
 import { useFoodLog, generateId } from './hooks/useFoodLog';
@@ -52,6 +52,7 @@ const App: React.FC = () => {
   const [editingLog, setEditingLog] = useState<FoodItem | null>(null);
   const [selectedFoodDetail, setSelectedFoodDetail] = useState<FoodItem | null>(null);
   const [isModalAnalyzing, setIsModalAnalyzing] = useState(false);
+  const [autoFillError, setAutoFillError] = useState('');
 
   // Visual Feedback State
   const [lastAddedId, setLastAddedId] = useState<string | null>(null);
@@ -146,7 +147,8 @@ const App: React.FC = () => {
         fiber: analysis.fiber,
         sugar: analysis.sugar,
         healthScore: analysis.healthScore,
-        smartInsights: analysis.smartInsights
+        smartInsights: analysis.smartInsights,
+        aiModel: analysis.model
       });
       setStatus(AppStatus.SUCCESS);
       setInputText('');
@@ -199,6 +201,7 @@ const App: React.FC = () => {
   const handleAutoFill = async () => {
     if (!editingLog || !editingLog.name) return;
     setIsModalAnalyzing(true);
+    setAutoFillError('');
     try {
         const analysis = await analyzeFoodInput(editingLog.name, userApiKey);
         if (analysis.name !== "Unknown Item") {
@@ -210,13 +213,14 @@ const App: React.FC = () => {
                 smartInsights: analysis.smartInsights,
                 healthScore: analysis.healthScore,
                 sugar: analysis.sugar,
-                fiber: analysis.fiber
+                fiber: analysis.fiber,
+                aiModel: analysis.model
             }) : null);
         } else {
-             alert("Could not identify food. Please try a clearer description.");
+             setAutoFillError("Could not identify food. Please try a clearer description.");
         }
-    } catch(e) {
-        alert("Analysis failed. Check connection/API key.");
+    } catch(e: any) {
+        setAutoFillError(e.message || "Analysis failed. Check connection/API key.");
     } finally {
         setIsModalAnalyzing(false);
     }
@@ -239,6 +243,7 @@ const App: React.FC = () => {
     }
 
     setEditingLog(null);
+    setAutoFillError('');
   };
 
   return (
@@ -483,6 +488,9 @@ const App: React.FC = () => {
                             <div className="flex-1">
                                 <h4 className="font-medium text-slate-200 capitalize">{item.name}</h4>
                                 <p className="text-xs text-slate-500 mt-0.5">{item.quantityStr}</p>
+                                {item.aiModel && item.aiModel !== PRIMARY_MODEL && (
+                                    <p className="text-[10px] text-amber-400/80 mt-0.5" title={`Estimated with ${item.aiModel}`}>Estimated with backup model</p>
+                                )}
                                 <div className="flex gap-2 mt-2 text-[10px] text-slate-400 font-mono">
                                     <span className="bg-slate-900 px-1.5 py-0.5 rounded">P: {item.macros.protein}g</span>
                                     <span className="bg-slate-900 px-1.5 py-0.5 rounded">C: {item.macros.carbs}g</span>
@@ -575,8 +583,9 @@ const App: React.FC = () => {
               onChange={setEditingLog}
               onAutoFill={handleAutoFill}
               isAnalyzing={isModalAnalyzing}
+              error={autoFillError}
               onSave={handleSaveEditedLog}
-              onClose={() => setEditingLog(null)}
+              onClose={() => { setEditingLog(null); setAutoFillError(''); }}
           />
       )}
     </div>
