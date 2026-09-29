@@ -91,7 +91,7 @@ const foodAnalysisSchema: Schema = {
   required: ["foodName", "calories", "protein", "carbs", "fat", "fiber", "sugar", "healthScore", "smartInsights"],
 };
 
-export const analyzeFoodInput = async (input: string, userApiKey?: string): Promise<{
+export interface FoodAnalysis {
   name: string;
   calories: number;
   macros: Macros;
@@ -99,16 +99,9 @@ export const analyzeFoodInput = async (input: string, userApiKey?: string): Prom
   sugar: number;
   healthScore: number;
   smartInsights: string[];
-}> => {
-  try {
-    const ai = getAiClient(userApiKey);
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Analyze the following food input: "${input}". 
-      Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
-      Be realistic with portion sizes if not specified.
-      
-      IMPORTANT: If the input is not a food item or cannot be analyzed, you MUST return a valid JSON object matching the schema with:
+}
+
+const UNKNOWN_ITEM_INSTRUCTIONS = `IMPORTANT: If the input is not a food item or cannot be analyzed, you MUST return a valid JSON object matching the schema with:
       - foodName: "Unknown Item"
       - calories: 0
       - protein: 0
@@ -118,12 +111,68 @@ export const analyzeFoodInput = async (input: string, userApiKey?: string): Prom
       - sugar: 0
       - healthScore: 0
       - smartInsights: ["Could not identify food", "Please try a different description"]
-      
-      Do not return markdown code blocks, just the JSON.`,
+
+      Do not return markdown code blocks, just the JSON.`;
+
+// Tried in order; the stable model is a fallback when the preview one is overloaded
+const MODELS = ["gemini-3-flash-preview", "gemini-3.8-flash"];
+const RETRIES_PER_MODEL = 2;
+
+const getStatusCode = (error: any): number | undefined => {
+  if (typeof error?.status === 'number') return error.status;
+  const match = String(error?.message ?? '').match(/"code"\s*:\s*(\d{3})/);
+  return match ? Number(match[1]) : undefined;
+};
+
+// Overloaded / rate limited / transient server errors are worth retrying
+const isRetryable = (error: any) => {
+  const code = getStatusCode(error);
+  return code === 429 || code === 500 || code === 503 || code === 504;
+};
+
+const friendlyErrorMessage = (error: any): string => {
+  const code = getStatusCode(error);
+  if (code === 503 || code === 500 || code === 504) return "Gemini is busy right now. Please try again in a minute.";
+  if (code === 404) return "The AI model is unavailable for your API key. Please try again later.";
+  if (code === 429) return "Your API key's free quota is used up. Try again later, or enable billing for the key in Google AI Studio.";
+  if (code === 400 || code === 401 || code === 403) return "Your API key was rejected. Check it in API Key Settings.";
+  if (error?.message === "API Key is missing.") return "Add your Gemini API key in API Key Settings.";
+  // Unrecognized: include the underlying reason so it can be diagnosed
+  const detail = String(error?.message ?? '').slice(0, 150);
+  return `Could not analyze food${detail ? ` (${detail})` : ''}. Please try again.`;
+};
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const generateWithFallback = async (ai: GoogleGenAI, request: Omit<Parameters<GoogleGenAI['models']['generateContent']>[0], 'model'>) => {
+  let lastError: any;
+  for (const model of MODELS) {
+    for (let attempt = 0; attempt < RETRIES_PER_MODEL; attempt++) {
+      try {
+        return await ai.models.generateContent({ ...request, model });
+      } catch (error: any) {
+        lastError = error;
+        // Retired model (404) or used-up quota (429, quotas are per model): retrying the
+        // same model won't help, so move straight on to the next one
+        const code = getStatusCode(error);
+        if (code === 404 || code === 429) break;
+        if (!isRetryable(error)) throw error;
+        if (attempt < RETRIES_PER_MODEL - 1) await sleep(1000 * (attempt + 1));
+      }
+    }
+  }
+  throw lastError;
+};
+
+const runAnalysis = async (contents: any, userApiKey?: string): Promise<FoodAnalysis> => {
+  try {
+    const ai = getAiClient(userApiKey);
+    const response = await generateWithFallback(ai, {
+      contents,
       config: {
         responseMimeType: "application/json",
         responseSchema: foodAnalysisSchema,
-        systemInstruction: "You are a professional nutritionist API. Your goal is to accurately estimate nutrition from natural language text. You always respond with valid JSON matching the schema."
+        systemInstruction: "You are a professional nutritionist API. Your goal is to accurately estimate nutrition from natural language text or food photos. You always respond with valid JSON matching the schema."
       },
     });
 
@@ -147,8 +196,24 @@ export const analyzeFoodInput = async (input: string, userApiKey?: string): Prom
     };
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
-    // Extract meaningful error message
-    const msg = error.message || "Failed to analyze food";
-    throw new Error(msg);
+    throw new Error(friendlyErrorMessage(error));
   }
 };
+
+export const analyzeFoodInput = (input: string, userApiKey?: string): Promise<FoodAnalysis> =>
+  runAnalysis(`Analyze the following food input: "${input}".
+      Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
+      Be realistic with portion sizes if not specified.
+
+      ${UNKNOWN_ITEM_INSTRUCTIONS}`, userApiKey);
+
+// base64Data is raw base64 (no data: prefix). note is optional extra context from the user.
+export const analyzeFoodImage = (base64Data: string, mimeType: string, note: string, userApiKey?: string): Promise<FoodAnalysis> =>
+  runAnalysis([
+    { inlineData: { mimeType, data: base64Data } },
+    { text: `Identify the food in this photo and estimate the portion visible.
+      ${note ? `Additional context from the user: "${note}".` : ''}
+      Estimate calories, macros, fiber, sugar, a health score (1-10), and provide 2 smart insights.
+
+      ${UNKNOWN_ITEM_INSTRUCTIONS}` },
+  ], userApiKey);
