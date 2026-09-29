@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { CalorieGauge } from './components/CalorieGauge';
 import { MacroChart } from './components/MacroChart';
 import { MacroProgress } from './components/MacroProgress';
+import { TrendsModal } from './components/TrendsModal';
 import { HistoryCalendar } from './components/HistoryCalendar';
 import { FoodDetailModal } from './components/FoodDetailModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -16,6 +17,7 @@ import { useLocalStorage } from './hooks/useLocalStorage';
 import { isSameDay, timestampForDay } from './utils/date';
 import { defaultMacroGoals } from './utils/macros';
 import { MEAL_TYPES, mealForTime } from './utils/meals';
+import { downloadBackup, parseBackup, restoreBackup } from './utils/backup';
 import { FoodItem, Macros, AppStatus } from './types';
 
 const blankItem = (id: string, insight: string): FoodItem => ({
@@ -48,6 +50,7 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
+  const [isTrendsOpen, setIsTrendsOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   // Modal Management
@@ -61,6 +64,7 @@ const App: React.FC = () => {
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -257,6 +261,21 @@ const App: React.FC = () => {
     setAutoFillError('');
   };
 
+  const handleBackupSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const { data, logCount } = parseBackup(await file.text());
+      if (!window.confirm(`Replace all current data with this backup (${logCount} entries)? This can't be undone.`)) return;
+      restoreBackup(data);
+      // Reload so every piece of state is re-read from storage
+      window.location.reload();
+    } catch (err: any) {
+      window.alert(err.message || 'Could not read the backup file.');
+    }
+  };
+
   const renderLogItem = (item: FoodItem) => (
     <div 
         key={item.id} 
@@ -352,6 +371,34 @@ const App: React.FC = () => {
                                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                             </svg>
                             Favorites / Quick Add
+                        </button>
+                        <button 
+                            onClick={() => { setIsTrendsOpen(true); setIsMenuOpen(false); }}
+                            className="w-full text-left px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-3 transition-colors"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                            Trends
+                        </button>
+                        <div className="h-px bg-slate-700 my-1 mx-3"></div>
+                        <button 
+                            onClick={() => { downloadBackup(); setIsMenuOpen(false); }}
+                            className="w-full text-left px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-3 transition-colors"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            Export Backup
+                        </button>
+                        <button 
+                            onClick={() => { backupInputRef.current?.click(); setIsMenuOpen(false); }}
+                            className="w-full text-left px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-3 transition-colors"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                            </svg>
+                            Restore Backup
                         </button>
                         <div className="h-px bg-slate-700 my-1 mx-3"></div>
                         <button 
@@ -491,6 +538,13 @@ const App: React.FC = () => {
                 </svg>
             </button>
             <input
+                ref={backupInputRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={handleBackupSelected}
+                className="hidden"
+            />
+            <input
                 ref={photoInputRef}
                 type="file"
                 accept="image/*"
@@ -591,6 +645,10 @@ const App: React.FC = () => {
               onCreate={handleCreateFavoriteClick}
               onClose={() => setIsFavoritesOpen(false)}
           />
+      )}
+
+      {isTrendsOpen && (
+          <TrendsModal logs={logs} dailyGoal={maintenanceCalories} onClose={() => setIsTrendsOpen(false)} />
       )}
 
        {selectedFoodDetail && (
